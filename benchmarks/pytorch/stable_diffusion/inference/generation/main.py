@@ -1,13 +1,47 @@
-import torch
-from diffusers import StableDiffusionPipeline
+#!/usr/bin/env python3
+"""
+PyTorch Combined Stable Diffusion Inference Benchmark
+Automatically runs both Stable Diffusion 1.5 and Stable Diffusion 3 Medium models
+with fp32, fp16, and mixed precision configurations
+"""
+
 import argparse
-import time
 import sys
 import os
+import time
 import numpy as np
+from pathlib import Path
+import torch
 from PIL import Image
+from datetime import datetime
 
-# Simple device utilities - everything in one place
+# Add utils to path for shared utilities
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', 'utils'))
+
+def get_gpu_memory_nvidia_smi():
+    """Get GPU memory using nvidia-smi directly"""
+    try:
+        import nvidia_smi
+        nvidia_smi.nvmlInit()
+        handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)
+        info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
+        nvidia_smi.nvmlShutdown()
+        
+        used_gb = info.used / (1024**3)
+        total_gb = info.total / (1024**3)
+        
+        return {
+            "total_gpu_used_gb": used_gb,
+            "total_gpu_total_gb": total_gb,
+            "gpu_utilization_percent": (used_gb / total_gb) * 100
+        }
+    except ImportError:
+        print("Warning: nvidia-ml-py3 not installed, memory measurement unavailable")
+        return None
+    except Exception as e:
+        print(f"Warning: GPU memory measurement failed: {e}")
+        return None
+
 def get_device():
     """Get the best available device (CUDA, MPS, or CPU)"""
     if torch.cuda.is_available():
@@ -25,30 +59,6 @@ def synchronize():
     elif device.type == "mps":
         if hasattr(torch.mps, 'synchronize'):
             torch.mps.synchronize()
-
-def get_gpu_memory_nvidia_smi():
-    """Get GPU memory using nvidia-smi directly"""
-    try:
-        import nvidia_smi
-        nvidia_smi.nvmlInit()
-        handle = nvidia_smi.nvmlDeviceGetHandleByIndex(0)
-        info = nvidia_smi.nvmlDeviceGetMemoryInfo(handle)
-        nvidia_smi.nvmlShutdown()
-        
-        used_gb = info.used / 1024**3
-        total_gb = info.total / 1024**3
-        
-        return {
-            "total_gpu_used_gb": used_gb,
-            "total_gpu_total_gb": total_gb,
-            "gpu_utilization_percent": (used_gb / total_gb) * 100
-        }
-    except ImportError:
-        print("Warning: nvidia-ml-py3 not installed, memory measurement unavailable")
-        return None
-    except Exception as e:
-        print(f"Warning: GPU memory measurement failed: {e}")
-        return None
 
 def print_device_info():
     """Print device information"""
@@ -74,23 +84,31 @@ def print_device_info():
     
     print("=" * 50)
 
-def get_model_id(model_name):
-    """Get the Hugging Face model ID for the given model name"""
-    model_mapping = {
-        'stable_diffusion_1_5': 'runwayml/stable-diffusion-v1-5',
-        'sd1.5': 'runwayml/stable-diffusion-v1-5',
-        'sd15': 'runwayml/stable-diffusion-v1-5',
-    }
-    return model_mapping.get(model_name.lower(), 'runwayml/stable-diffusion-v1-5')
+def get_model_configs():
+    """Get configurations for both SD models"""
+    return [
+        {
+            'name': 'stable_diffusion_1_5',
+            'type': 'sd15',
+            'model_id': 'runwayml/stable-diffusion-v1-5',
+            'display_name': 'Stable Diffusion 1.5'
+        },
+        {
+            'name': 'stable_diffusion_3_medium',
+            'type': 'sd3',
+            'model_id': 'stabilityai/stable-diffusion-3-medium-diffusers',
+            'display_name': 'Stable Diffusion 3 Medium'
+        }
+    ]
 
 def get_test_prompts():
-    """Get a set of test prompts for benchmarking"""
+    """Get a set of test prompts suitable for both SD 1.5 and SD3"""
     return [
+        "A cat holding a sign that says hello world",
         "A beautiful landscape with mountains and a lake at sunset",
-        "A cute cat sitting on a windowsill",
-        "A futuristic city with flying cars",
-        "A portrait of a person with blue eyes",
-        "A colorful abstract painting"
+        "A futuristic city with flying cars and neon lights",
+        "A portrait of a person with intricate details",
+        "An abstract art piece with vibrant colors"
     ]
 
 def save_images(images, output_dir, prefix="generated"):
@@ -105,7 +123,8 @@ def save_images(images, output_dir, prefix="generated"):
             image = (image * 255).astype(np.uint8)
             image = Image.fromarray(image)
         
-        filename = f"{prefix}_{i+1}.png"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{prefix}_{timestamp}_{i+1}.png"
         filepath = os.path.join(output_dir, filename)
         image.save(filepath)
         saved_paths.append(filepath)
@@ -113,74 +132,40 @@ def save_images(images, output_dir, prefix="generated"):
     
     return saved_paths
 
-def run_inference(params):
-    """Main inference function"""
-    model_name = params.model.lower() if params.model else "stable_diffusion_1_5"
-    model_id = get_model_id(model_name)
+def load_sd15_pipeline(model_id, precision, device):
+    """Load Stable Diffusion 1.5 pipeline"""
+    from diffusers import StableDiffusionPipeline
     
-    print(f"Running {model_name} Stable Diffusion inference benchmark")
-    print(f"Model ID: {model_id}")
-    print(f"Precision: {params.precision}")
-    print(f"Batch size: {params.batch_size}")
-    print(f"Image size: {params.height}x{params.width}")
-    print(f"Inference steps: {params.num_inference_steps}")
-    
-    # Get device and print info
-    device = get_device()
-    print_device_info()
-    print(f"Using device: {device}")
-    
-    # Measure initial memory usage
-    initial_memory = get_gpu_memory_nvidia_smi()
-    
-    print("Loading Stable Diffusion pipeline...")
-    
-    # Load the pipeline with appropriate precision
-    if params.precision == "fp16" and device.type == "cuda":
+    if precision == "fp16" and device.type == "cuda":
         pipeline = StableDiffusionPipeline.from_pretrained(
             model_id,
             torch_dtype=torch.float16,
             safety_checker=None,
             requires_safety_checker=False
         )
-    elif params.precision == "mixed" and device.type == "cuda":
+    elif precision == "mixed" and device.type == "cuda":
         pipeline = StableDiffusionPipeline.from_pretrained(
             model_id,
             torch_dtype=torch.float32,  # Load in FP32 for true mixed precision
             safety_checker=None,
             requires_safety_checker=False
         )
-        # Enable memory efficient attention
-        try:
-            if hasattr(pipeline, 'enable_attention_slicing'):
-                pipeline.enable_attention_slicing()
-        except Exception as e:
-            print(f"Note: Could not enable attention slicing: {e}")
-        
-        try:
-            if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
-                pipeline.enable_xformers_memory_efficient_attention()
-            elif hasattr(pipeline, 'enable_memory_efficient_attention'):
-                pipeline.enable_memory_efficient_attention()
-        except Exception as e:
-            print(f"Note: Could not enable memory efficient attention: {e}")
     else:
         pipeline = StableDiffusionPipeline.from_pretrained(
             model_id,
             safety_checker=None,
             requires_safety_checker=False
         )
-        if params.precision == "fp16" and device.type != "cuda":
+        if precision == "fp16" and device.type != "cuda":
             print("Warning: FP16 not supported on CPU, using FP32")
-        if params.precision == "mixed" and device.type != "cuda":
+        if precision == "mixed" and device.type != "cuda":
             print("Warning: Mixed precision not supported on CPU, using FP32")
     
     # Move pipeline to device
     pipeline = pipeline.to(device)
     
-    # Enable optimizations
+    # Enable optimizations for SD 1.5
     if device.type == "cuda":
-        # Try to enable memory efficient attention (API changed in newer diffusers)
         try:
             if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
                 pipeline.enable_xformers_memory_efficient_attention()
@@ -189,21 +174,103 @@ def run_inference(params):
         except Exception as e:
             print(f"Note: Could not enable memory efficient attention: {e}")
         
-        # Try to enable attention slicing
         try:
             if hasattr(pipeline, 'enable_attention_slicing'):
                 pipeline.enable_attention_slicing()
         except Exception as e:
             print(f"Note: Could not enable attention slicing: {e}")
     
+    return pipeline
+
+def load_sd3_pipeline(model_id, precision, device, cpu_offload=False):
+    """Load Stable Diffusion 3 pipeline"""
+    from diffusers import StableDiffusion3Pipeline
+    
+    if precision == "fp16":
+        pipeline = StableDiffusion3Pipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    elif precision == "mixed":
+        pipeline = StableDiffusion3Pipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    else:  # fp32
+        pipeline = StableDiffusion3Pipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    
+    # Move to device if not using device_map
+    if device.type == "cuda":
+        try:
+            pipeline = pipeline.to(device)
+        except ValueError as e:
+            if "device mapping strategy" in str(e):
+                print("✓ Using device mapping strategy, skipping manual device placement")
+            else:
+                raise e
+    
+    # Enable optimizations for SD3
+    try:
+        if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
+            pipeline.enable_xformers_memory_efficient_attention()
+            print("✓ Enabled xformers memory efficient attention")
+    except Exception as e:
+        print(f"Note: Could not enable memory efficient attention: {e}")
+    
+    try:
+        if hasattr(pipeline, 'enable_model_cpu_offload') and cpu_offload:
+            pipeline.enable_model_cpu_offload()
+            print("✓ Enabled model CPU offload")
+    except Exception as e:
+        print(f"Note: Could not enable model CPU offload: {e}")
+    
+    return pipeline
+
+def run_single_model_benchmark(model_config, params):
+    """Run benchmark for a single model"""
+    model_type = model_config['type']
+    model_id = model_config['model_id']
+    display_name = model_config['display_name']
+    
+    print(f"\n{'='*60}")
+    print(f"BENCHMARKING: {display_name}")
+    print(f"{'='*60}")
+    print(f"Model ID: {model_id}")
+    print(f"Model Type: {model_type.upper()}")
+    print(f"Precision: {params.precision}")
+    print(f"Batch size: {params.batch_size}")
+    print(f"Image size: {params.height}x{params.width}")
+    print(f"Inference steps: {params.num_inference_steps}")
+    if model_type == 'sd3':
+        print(f"Guidance scale: {params.guidance_scale}")
+    
+    device = get_device()
+    
+    # Measure initial memory usage
+    initial_memory = get_gpu_memory_nvidia_smi()
+    
+    print(f"Loading {display_name} pipeline...")
+    
+    # Load the appropriate pipeline based on model type
+    if model_type == 'sd15':
+        pipeline = load_sd15_pipeline(model_id, params.precision, device)
+    elif model_type == 'sd3':
+        pipeline = load_sd3_pipeline(model_id, params.precision, device, params.cpu_offload)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+    
     # Measure memory after loading
     warmup_memory = get_gpu_memory_nvidia_smi()
     
     # Get test prompts
     test_prompts = get_test_prompts()
-    
-    # Use the first prompt for benchmarking
-    prompt = test_prompts[0]
+    prompt = test_prompts[0] if not params.custom_prompt else params.custom_prompt
     print(f"Test prompt: '{prompt}'")
     
     # Warm-up runs
@@ -212,165 +279,316 @@ def run_inference(params):
         print(f"Warm-up {i+1}/2...")
         with torch.no_grad():
             if params.precision == "mixed" and device.type == "cuda":
-                with torch.cuda.amp.autocast():
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
                     _ = pipeline(
                         prompt,
                         height=params.height,
                         width=params.width,
-                        num_inference_steps=params.num_inference_steps,
-                        num_images_per_prompt=1,
-                        guidance_scale=7.5
-                    )
+                        num_inference_steps=10,  # Fewer steps for warmup
+                        guidance_scale=params.guidance_scale if model_type == 'sd3' else 7.5,
+                        num_images_per_prompt=1
+                    ).images
             else:
-                _ = pipeline(
-                    prompt,
-                    height=params.height,
-                    width=params.width,
-                    num_inference_steps=params.num_inference_steps,
-                    num_images_per_prompt=1,
-                    guidance_scale=7.5
-                )
+                generation_kwargs = {
+                    'prompt': prompt,
+                    'height': params.height,
+                    'width': params.width,
+                    'num_inference_steps': 10,  # Fewer steps for warmup
+                    'num_images_per_prompt': 1
+                }
+                
+                # Add guidance_scale only for SD3
+                if model_type == 'sd3':
+                    generation_kwargs['guidance_scale'] = params.guidance_scale
+                else:
+                    generation_kwargs['guidance_scale'] = 7.5
+                
+                _ = pipeline(**generation_kwargs).images
+        
         synchronize()
+    
+    print("Warm-up completed. Starting benchmark...")
     
     # Benchmark runs
-    print("Running benchmark...")
-    latencies = []
-    num_runs = params.num_runs
-    generated_images = []
+    times = []
+    all_images = []
     
-    for i in range(num_runs):
+    for run in range(params.num_runs):
+        print(f"Benchmark run {run + 1}/{params.num_runs}")
+        
+        # Prepare batch prompts
+        batch_prompts = [prompt] * params.batch_size
+        
         synchronize()
-        start = time.time()
+        start_time = time.time()
         
         with torch.no_grad():
             if params.precision == "mixed" and device.type == "cuda":
-                with torch.cuda.amp.autocast():
-                    result = pipeline(
-                        prompt,
-                        height=params.height,
-                        width=params.width,
-                        num_inference_steps=params.num_inference_steps,
-                        num_images_per_prompt=params.batch_size,
-                        guidance_scale=7.5
-                    )
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    generation_kwargs = {
+                        'prompt': batch_prompts,
+                        'height': params.height,
+                        'width': params.width,
+                        'num_inference_steps': params.num_inference_steps,
+                        'num_images_per_prompt': 1
+                    }
+                    
+                    # Add guidance_scale only for SD3
+                    if model_type == 'sd3':
+                        generation_kwargs['guidance_scale'] = params.guidance_scale
+                    else:
+                        generation_kwargs['guidance_scale'] = 7.5
+                    
+                    result = pipeline(**generation_kwargs)
             else:
-                result = pipeline(
-                    prompt,
-                    height=params.height,
-                    width=params.width,
-                    num_inference_steps=params.num_inference_steps,
-                    num_images_per_prompt=params.batch_size,
-                    guidance_scale=7.5
-                )
+                generation_kwargs = {
+                    'prompt': batch_prompts,
+                    'height': params.height,
+                    'width': params.width,
+                    'num_inference_steps': params.num_inference_steps,
+                    'num_images_per_prompt': 1
+                }
+                
+                # Add guidance_scale only for SD3
+                if model_type == 'sd3':
+                    generation_kwargs['guidance_scale'] = params.guidance_scale
+                else:
+                    generation_kwargs['guidance_scale'] = 7.5
+                
+                result = pipeline(**generation_kwargs)
         
         synchronize()
-        latency = time.time() - start
-        latencies.append(latency)
+        end_time = time.time()
+        
+        run_time = end_time - start_time
+        times.append(run_time)
         
         # Store images from first run for saving
-        if i == 0:
-            generated_images = result.images
+        if run == 0:
+            all_images = result.images
         
-        print(f"Run {i+1}/{num_runs}: {latency:.2f} seconds")
+        images_per_second = params.batch_size / run_time
+        time_per_image = run_time / params.batch_size
+        
+        print(f"  Time: {run_time:.2f}s | Images/sec: {images_per_second:.2f} | Time/image: {time_per_image:.2f}s")
     
     # Calculate statistics
-    avg_latency = sum(latencies) / len(latencies)
-    min_latency = min(latencies)
-    max_latency = max(latencies)
-    std_latency = np.std(latencies)
+    avg_time = np.mean(times)
+    std_time = np.std(times)
+    min_time = np.min(times)
+    max_time = np.max(times)
     
-    # Calculate throughput (images per second)
-    images_per_run = params.batch_size
-    throughput = images_per_run / avg_latency
+    avg_images_per_second = params.batch_size / avg_time
+    avg_time_per_image = avg_time / params.batch_size
+    avg_latency_ms = avg_time_per_image * 1000  # Convert to milliseconds
     
-    # Calculate per-image latency
-    per_image_latency = avg_latency / images_per_run  # seconds per image
-    
-    # Measure final memory usage
+    # Measure final memory
     final_memory = get_gpu_memory_nvidia_smi()
     
-    # Save generated images
-    if generated_images and params.save_images:
-        output_dir = f"generated_images_{model_name}"
-        saved_paths = save_images(generated_images, output_dir, f"{model_name}_benchmark")
-        print(f"Generated images saved to: {output_dir}")
-    
-    # Print results in a format that can be parsed by the main benchmark framework
-    print(f"\n{'='*50}")
-    print("BENCHMARK RESULTS")
-    print(f"{'='*50}")
-    print(f"Model: {model_name}")
-    print(f"Framework: PyTorch")
-    print(f"Device: {device}")
+    # Print results in both human-readable and parseable formats
+    print(f"\n{'-'*50}")
+    print(f"RESULTS: {display_name}")
+    print(f"{'-'*50}")
+    print(f"Model: {display_name}")
+    print(f"Model Type: {model_type.upper()}")
     print(f"Precision: {params.precision}")
     print(f"Batch size: {params.batch_size}")
     print(f"Image size: {params.height}x{params.width}")
     print(f"Inference steps: {params.num_inference_steps}")
-    print(f"Average Generation Time: {avg_latency:.2f} seconds")
-    print(f"Per-image Latency: {per_image_latency:.2f} seconds/image")
-    print(f"Per-sample Latency: {per_image_latency*1000:.2f} ms/sample")
-    print(f"Min Generation Time: {min_latency:.2f} seconds")
-    print(f"Max Generation Time: {max_latency:.2f} seconds")
-    print(f"Std Generation Time: {std_latency:.2f} seconds")
-    print(f"Throughput: {throughput:.2f} samples/sec")
+    if model_type == 'sd3':
+        print(f"Guidance scale: {params.guidance_scale}")
+    print(f"Number of runs: {params.num_runs}")
+    print()
+    print(f"Average time per run: {avg_time:.3f} ± {std_time:.3f} seconds")
+    print(f"Min time: {min_time:.3f} seconds")
+    print(f"Max time: {max_time:.3f} seconds")
+    print(f"Average images per second: {avg_images_per_second:.2f}")
+    print(f"Average time per image: {avg_time_per_image:.3f} seconds")
     
     # Memory information
     if final_memory:
-        print(f"Total GPU Memory Used: {final_memory.get('total_gpu_used_gb', 0):.3f} GB")
-        print(f"Total GPU Memory Available: {final_memory.get('total_gpu_total_gb', 0):.3f} GB")
-        print(f"GPU Memory Utilization: {final_memory.get('gpu_utilization_percent', 0):.1f}%")
+        print(f"\nMemory usage: {final_memory['total_gpu_used_gb']:.2f} GB")
+        print(f"GPU utilization: {final_memory['gpu_utilization_percent']:.1f}%")
     
-    print(f"PyTorch Inference Time = {avg_latency*1000:.2f} ms")
+    # Output in format expected by benchmark framework
+    print(f"\n# Benchmark Framework Parseable Output for {display_name}")
+    print(f"Framework: PyTorch")
+    print(f"Device: {device}")
+    print(f"Throughput: {avg_images_per_second:.2f} samples/sec")
+    print(f"Per-sample Latency: {avg_latency_ms:.2f} ms/sample")
+    if final_memory:
+        print(f"Total GPU Memory Used: {final_memory['total_gpu_used_gb']:.2f} GB")
+    print(f"# End Parseable Output for {display_name}")
     
+    # Save images if requested
+    if params.save_images and all_images:
+        print(f"\nSaving {len(all_images)} generated images...")
+        output_dir = params.output_dir or f"output_{model_type}_{params.precision}"
+        prefix = f"{model_type}_{params.precision}_bs{params.batch_size}"
+        saved_paths = save_images(all_images, output_dir, prefix)
+        print(f"Images saved to: {output_dir}")
+    
+    # Clean up pipeline to free memory
+    del pipeline
+    torch.cuda.empty_cache() if torch.cuda.is_available() else None
+    
+    # Return results for potential further processing
     return {
-        "avg_latency_ms": avg_latency * 1000,
-        "per_image_latency_seconds": per_image_latency,
-        "min_latency_ms": min_latency * 1000,
-        "max_latency_ms": max_latency * 1000,
-        "std_latency_ms": std_latency * 1000,
-        "throughput_fps": throughput,
-        "images_per_sec": throughput,
-        "device": str(device),
-        "framework": "PyTorch",
-        "model_id": model_id,
-        "image_size": f"{params.height}x{params.width}",
-        "inference_steps": params.num_inference_steps,
-        "memory_usage": final_memory,
-        "generated_images": len(generated_images) if generated_images else 0
+        'model': display_name,
+        'model_type': model_type,
+        'precision': params.precision,
+        'batch_size': params.batch_size,
+        'image_size': f"{params.height}x{params.width}",
+        'inference_steps': params.num_inference_steps,
+        'guidance_scale': params.guidance_scale if model_type == 'sd3' else 7.5,
+        'num_runs': params.num_runs,
+        'avg_time': avg_time,
+        'std_time': std_time,
+        'min_time': min_time,
+        'max_time': max_time,
+        'avg_images_per_second': avg_images_per_second,
+        'avg_time_per_image': avg_time_per_image,
+        'memory_usage_gb': final_memory['total_gpu_used_gb'] if final_memory else None,
+        'gpu_utilization_percent': final_memory['gpu_utilization_percent'] if final_memory else None
     }
+
+def run_inference(params):
+    """Main inference function that runs both SD 1.5 and SD3"""
+    
+    print("=" * 60)
+    print("STABLE DIFFUSION COMBINED BENCHMARK")
+    print("=" * 60)
+    print(f"Running benchmarks for both Stable Diffusion models")
+    print(f"Precision: {params.precision}")
+    print(f"Batch size: {params.batch_size}")
+    print(f"Image size: {params.height}x{params.width}")
+    print(f"Inference steps: {params.num_inference_steps}")
+    print(f"Number of runs per model: {params.num_runs}")
+    
+    # Get device and print info
+    device = get_device()
+    print_device_info()
+    print(f"Using device: {device}")
+    
+    # Get model configurations
+    model_configs = get_model_configs()
+    
+    # If specific model is requested, filter to that model
+    if hasattr(params, 'model') and params.model:
+        # Map model names to configs
+        model_name_mapping = {
+            'stable_diffusion_1_5': 'stable_diffusion_1_5',
+            'sd1.5': 'stable_diffusion_1_5', 
+            'sd15': 'stable_diffusion_1_5',
+            'stable_diffusion_3_medium': 'stable_diffusion_3_medium',
+            'sd3_medium': 'stable_diffusion_3_medium',
+            'sd3': 'stable_diffusion_3_medium'
+        }
+        
+        target_model = model_name_mapping.get(params.model.lower())
+        if target_model:
+            model_configs = [config for config in model_configs if config['name'] == target_model]
+        else:
+            print(f"Warning: Unknown model '{params.model}', running all models")
+    
+    all_results = []
+    
+    # Run benchmarks for each model
+    for i, model_config in enumerate(model_configs):
+        try:
+            print(f"\n{'='*60}")
+            print(f"STARTING MODEL {i+1}/{len(model_configs)}: {model_config['display_name']}")
+            print(f"{'='*60}")
+            
+            result = run_single_model_benchmark(model_config, params)
+            all_results.append(result)
+            
+        except Exception as e:
+            print(f"Error benchmarking {model_config['display_name']}: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Add failed result
+            all_results.append({
+                'model': model_config['display_name'],
+                'model_type': model_config['type'],
+                'status': 'FAILED',
+                'error': str(e)
+            })
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print("BENCHMARK SUMMARY")
+    print(f"{'='*60}")
+    
+    for result in all_results:
+        if 'status' in result and result['status'] == 'FAILED':
+            print(f"❌ {result['model']}: FAILED - {result['error']}")
+        else:
+            print(f"✅ {result['model']}: {result['avg_images_per_second']:.2f} images/sec, {result['memory_usage_gb']:.1f} GB VRAM")
+    
+    print(f"{'='*60}")
+    print("Benchmark completed!")
+    
+    return all_results
 
 def main():
     """Main function"""
-    parser = argparse.ArgumentParser(description="PyTorch Stable Diffusion Inference Benchmark")
-    parser.add_argument("--model", type=str, default="stable_diffusion_1_5", 
-                       help="Model name for Stable Diffusion")
-    parser.add_argument("--precision", type=str, default="fp32",
-                       choices=["fp32", "fp16", "mixed"],
-                       help="Precision for inference")
-    parser.add_argument("--batch_size", type=int, default=1,
-                       help="Number of images to generate per batch")
-    parser.add_argument("--height", type=int, default=512,
-                       help="Height of generated images")
-    parser.add_argument("--width", type=int, default=512,
-                       help="Width of generated images")
-    parser.add_argument("--num_inference_steps", type=int, default=20,
-                       help="Number of denoising steps")
-    parser.add_argument("--num_runs", type=int, default=3,
-                       help="Number of benchmark runs")
-    parser.add_argument("--save_images", action="store_true",
-                       help="Save generated images to disk")
+    parser = argparse.ArgumentParser(description='Combined Stable Diffusion Inference Benchmark')
+    
+    # Model selection (optional - if not specified, runs both models)
+    parser.add_argument('--model', type=str, default=None,
+                        choices=['stable_diffusion_1_5', 'sd1.5', 'sd15', 
+                                'stable_diffusion_3_medium', 'sd3_medium', 'sd3'],
+                        help='Specific model to benchmark (default: run both models)')
+    
+    # Precision settings
+    parser.add_argument('--precision', type=str, default='fp16',
+                        choices=['fp32', 'fp16', 'mixed'],
+                        help='Precision mode (default: fp16)')
+    
+    # Generation parameters
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='Batch size for inference (default: 1)')
+    parser.add_argument('--height', type=int, default=512,
+                        help='Image height (default: 512)')
+    parser.add_argument('--width', type=int, default=512,
+                        help='Image width (default: 512)')
+    parser.add_argument('--num-inference-steps', type=int, default=20,
+                        help='Number of inference steps (default: 20)')
+    parser.add_argument('--guidance-scale', type=float, default=4.5,
+                        help='Guidance scale for SD3 (default: 4.5)')
+    
+    # Benchmark settings
+    parser.add_argument('--num-runs', type=int, default=5,
+                        help='Number of benchmark runs (default: 5)')
+    
+    # Memory optimization
+    parser.add_argument('--cpu-offload', action='store_true',
+                        help='Enable CPU offload for SD3 (saves GPU memory)')
+    
+    # Output settings
+    parser.add_argument('--save-images', action='store_true',
+                        help='Save generated images to disk')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Output directory for images (default: auto-generated)')
+    parser.add_argument('--custom-prompt', type=str, default=None,
+                        help='Custom prompt for generation (default: use test prompt)')
+    
     args = parser.parse_args()
-
+    
     try:
         results = run_inference(args)
-        print("Benchmark completed successfully!")
+        print("\nBenchmark completed successfully!")
         return 0
+    except KeyboardInterrupt:
+        print("\nBenchmark interrupted by user")
+        return 1
     except Exception as e:
-        print(f"Benchmark failed: {str(e)}")
+        print(f"\nError during benchmark: {e}")
         import traceback
         traceback.print_exc()
         return 1
 
-if __name__ == '__main__':
-    exit_code = main()
-    sys.exit(exit_code) 
+if __name__ == "__main__":
+    sys.exit(main()) 

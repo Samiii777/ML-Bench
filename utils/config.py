@@ -12,9 +12,9 @@ MODEL_FAMILIES = {
     'stable_diffusion_1_5': 'stable_diffusion',
     'sd1.5': 'stable_diffusion',
     'sd15': 'stable_diffusion',
-    'stable_diffusion_3_medium': 'stable_diffusion_3',
-    'sd3_medium': 'stable_diffusion_3',
-    'sd3': 'stable_diffusion_3',
+    'stable_diffusion_3_medium': 'stable_diffusion',
+    'sd3_medium': 'stable_diffusion',
+    'sd3': 'stable_diffusion',
     'gpu_ops': 'gpu_ops',
     'gemm_ops': 'gpu_ops',
     'conv_ops': 'gpu_ops',
@@ -67,8 +67,7 @@ def get_unique_models(framework="pytorch"):
         # Only include the canonical model names, not aliases
         return [
             "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
-            "stable_diffusion_1_5",  # Only the canonical name, not sd1.5 or sd15
-            "stable_diffusion_3_medium", "sd3_medium", "sd3",
+            "stable_diffusion_1_5", "stable_diffusion_3_medium",  # Both SD models as separate entries
             "gpu_ops", "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"  # GPU operations benchmark
         ]
     elif framework == "onnx":
@@ -104,7 +103,7 @@ def get_default_use_case_for_model(model_name):
     model_family = get_model_family(model_name)
     
     # Map model families to their appropriate use cases
-    if model_family == "stable_diffusion" or model_family == "stable_diffusion_3":
+    if model_family == "stable_diffusion":
         return "generation"
     elif model_family == "resnet":
         return "classification"
@@ -118,7 +117,7 @@ def get_available_frameworks_for_model(model_name):
     model_family = get_model_family(model_name)
     
     # Map model families to their available frameworks
-    if model_family == "stable_diffusion" or model_family == "stable_diffusion_3":
+    if model_family == "stable_diffusion":
         return ["pytorch"]  # Only PyTorch for Stable Diffusion
     elif model_family == "resnet":
         return ["pytorch", "onnx"]  # Both frameworks for ResNet
