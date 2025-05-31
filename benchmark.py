@@ -19,8 +19,9 @@ import torch
 sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
 
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case
+from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, check_memory_availability, get_memory_requirement
 from utils.results import BenchmarkResults
+from utils.shared_device_utils import get_gpu_memory_efficient
 
 class BenchmarkRunner:
     def __init__(self):
@@ -81,6 +82,25 @@ class BenchmarkRunner:
                 "metrics": {}
             }
         
+        # Pre-flight memory check for GPU benchmarks
+        if framework == "pytorch" and torch.cuda.is_available():
+            gpu_memory_info = get_gpu_memory_efficient()
+            if gpu_memory_info and gpu_memory_info.get("total_gpu_total_gb"):
+                available_memory = gpu_memory_info["total_gpu_free_gb"]
+                total_memory = gpu_memory_info["total_gpu_total_gb"]
+                
+                # Check if configuration will fit in memory
+                will_fit, required_memory, recommendation = check_memory_availability(
+                    model, precision, batch_size, available_memory, safety_margin=2.0
+                )
+                
+                if not will_fit:
+                    # Log the memory issue but don't fail immediately - let the benchmark try
+                    self.logger.warning(f"Memory warning for {model} {precision} BS={batch_size}: {recommendation}")
+                    # Still proceed with the benchmark - it might work with optimizations
+                else:
+                    self.logger.info(f"Memory check passed for {model} {precision} BS={batch_size}: requires {required_memory:.1f}GB, {available_memory:.1f}GB available")
+        
         # Prepare command
         cmd = [
             sys.executable, "main.py",
@@ -123,9 +143,18 @@ class BenchmarkRunner:
                     "stderr": result.stderr
                 }
             else:
+                # Check if this was likely an OOM error
+                error_output = result.stderr.lower()
+                if "out of memory" in error_output or "cuda out of memory" in error_output:
+                    # Provide helpful OOM guidance
+                    required_memory = get_memory_requirement(model, precision, batch_size)
+                    error_msg = f"CUDA Out of Memory (estimated requirement: {required_memory:.1f}GB). Try: reduce batch size, use fp16 precision, or enable CPU offload"
+                else:
+                    error_msg = f"Script failed with return code {result.returncode}"
+                
                 return {
                     "status": "FAIL",
-                    "error": f"Script failed with return code {result.returncode}",
+                    "error": error_msg,
                     "execution_time": execution_time,
                     "stdout": result.stdout,
                     "stderr": result.stderr,
@@ -295,142 +324,171 @@ class BenchmarkRunner:
         return metrics
     
     def run_comprehensive_benchmarks(self, args) -> None:
-        """Run comprehensive benchmarks testing all combinations when parameters not specified"""
+        """Run comprehensive benchmarks across all configurations"""
+        print("Starting comprehensive benchmark run")
         
-        # Determine which frameworks to test
-        if hasattr(args, 'framework') and args.framework:
-            frameworks = [args.framework]
+        # Determine frameworks to test
+        if args.framework:
+            # Handle both single framework and list of frameworks
+            if isinstance(args.framework, list):
+                frameworks = args.framework
+            else:
+                frameworks = [args.framework]
         elif args.model:
-            # If a specific model is provided, use model-aware framework selection
-            frameworks = get_available_frameworks_for_model(args.model)
+            # Handle both single model and list of models
+            model_name = args.model[0] if isinstance(args.model, list) else args.model
+            frameworks = get_available_frameworks_for_model(model_name)
         elif args.use_case:
-            # If a specific use case is provided, use use case-aware framework selection
             frameworks = get_available_frameworks_for_use_case(args.use_case)
         else:
             frameworks = get_default_frameworks()
         
-        # Calculate total number of tests across all frameworks
-        total_tests = 0
-        for framework in frameworks:
-            framework_args = type('Args', (), vars(args).copy())()
-            framework_args.framework = framework
-            total_tests += self._calculate_total_tests(framework_args)
+        print(f"Frameworks: {frameworks}")
         
-        self.logger.info("Starting comprehensive benchmark run")
-        self.logger.info(f"Frameworks: {frameworks}")
+        # Determine use case
         if args.use_case:
-            self.logger.info(f"Use case: {args.use_case}")
-        self.logger.info(f"Total tests to run: {total_tests}")
+            use_case = args.use_case
+        elif args.model:
+            # Handle both single model and list of models
+            model_name = args.model[0] if isinstance(args.model, list) else args.model
+            use_case = get_default_use_case_for_model(model_name)
+        else:
+            use_case = "classification"
         
-        total_passed = 0
-        total_failed = 0
+        print(f"Use case: {use_case}")
+        
+        # Calculate total tests
+        total_tests = self._calculate_total_tests(args)
+        print(f"Total tests to run: {total_tests}")
+        print()
+        
+        # Run tests for each framework
         all_results = []
-        current_test = 0
+        test_counter = 0
         
         for framework in frameworks:
-            self.logger.info(f"\n{'='*100}")
-            self.logger.info(f"TESTING FRAMEWORK: {framework.upper()}")
-            self.logger.info(f"{'='*100}")
+            print(f"{'='*100}")
+            print(f"TESTING FRAMEWORK: {framework.upper()}")
+            print(f"{'='*100}")
             
-            # Create a copy of args with the current framework
+            # Create a copy of args with the current framework set
             framework_args = type('Args', (), vars(args).copy())()
             framework_args.framework = framework
             
-            # Run framework-specific comprehensive benchmarks
-            framework_results = self._run_framework_comprehensive_benchmarks(framework_args, current_test, total_tests)
-            
-            # Collect results
-            all_results.extend(framework_results['results'])
-            total_passed += framework_results['passed']
-            total_failed += framework_results['failed']
-            current_test += len(framework_results['results'])
+            framework_results = self._run_framework_comprehensive_benchmarks(framework_args, test_counter, total_tests)
+            all_results.extend(framework_results["results"])
+            test_counter = framework_results["test_counter"]
         
-        # Save combined results
+        # Save and display results
         self.results.save_results(all_results, args)
         
         # Print overall summary
-        self.logger.info(f"\n{'='*100}")
-        self.logger.info("OVERALL COMPREHENSIVE BENCHMARK SUMMARY")
-        self.logger.info(f"{'='*100}")
-        self.logger.info(f"Frameworks tested: {frameworks}")
-        self.logger.info(f"Total combinations tested: {len(all_results)}")
-        self.logger.success(f"Total passed: {total_passed}")
-        self.logger.error(f"Total failed: {total_failed}")
-        self.logger.info(f"Overall success rate: {(total_passed/(total_passed + total_failed))*100:.1f}%")
+        print(f"\n{'='*100}")
+        print("OVERALL COMPREHENSIVE BENCHMARK SUMMARY")
+        print(f"{'='*100}")
+        print(f"Frameworks tested: {frameworks}")
+        
+        total_tests_run = len(all_results)
+        passed_tests = len([r for r in all_results if r["status"] == "PASS"])
+        failed_tests = total_tests_run - passed_tests
+        
+        print(f"Total combinations tested: {total_tests_run}")
+        print(f"Total passed: {passed_tests}")
+        print(f"Total failed: {failed_tests}")
+        print(f"Overall success rate: {(passed_tests/total_tests_run)*100:.1f}%")
+        print()
         
         # Print detailed results table
         self.results.print_summary_table(all_results)
-        
-        # Print performance analysis
-        self._print_performance_analysis(all_results)
-        
-        # Print framework comparison
-        self._print_framework_comparison(all_results, frameworks)
     
     def _calculate_total_tests(self, args) -> int:
         """Calculate total number of tests for a framework"""
-        # Determine which models to test
-        if args.model is None:
-            if args.use_case:
-                # Filter models by use case
-                models = get_models_for_use_case(args.use_case, args.framework)
+        # Determine frameworks to test
+        if args.framework:
+            if isinstance(args.framework, list):
+                frameworks = args.framework
             else:
-                models = get_unique_models(args.framework)
-        elif args.model in ["resnet", "resnet*"]:
-            models = self.get_available_models(args.framework, "resnet")
-        elif args.model == "gpu_ops":
-            models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
+                frameworks = [args.framework]
         else:
-            models = [args.model]
+            frameworks = get_default_frameworks()
         
-        # Determine which precisions to test
-        if args.precision is None:
-            precisions = DEFAULT_PRECISIONS
-        else:
-            precisions = [args.precision]
-        
-        # Determine which batch sizes to test
-        if args.batch_size is None:
-            batch_sizes = DEFAULT_BATCH_SIZES
-        else:
-            batch_sizes = [args.batch_size]
-        
-        # For ONNX, also test different execution providers
-        execution_providers = []
-        if args.framework == "onnx":
-            execution_providers = get_onnx_execution_providers()
-        else:
-            execution_providers = [None]
-        
-        # Calculate total combinations, accounting for skipped tests
         total = 0
-        for model in models:
-            for precision in precisions:
-                for batch_size in batch_sizes:
-                    for execution_provider in execution_providers:
-                        # Skip FP16 on CPU
-                        if precision == "fp16" and not torch.cuda.is_available():
-                            continue
-                        # Skip FP16 for CPU execution provider in ONNX
-                        if args.framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
-                            continue
-                        total += 1
+        for framework in frameworks:
+            # Determine which models to test
+            if args.model is None:
+                if args.use_case:
+                    # Filter models by use case
+                    models = get_models_for_use_case(args.use_case, framework)
+                else:
+                    models = get_unique_models(framework)
+            elif isinstance(args.model, list):
+                models = args.model
+            elif args.model in ["resnet", "resnet*"]:
+                models = self.get_available_models(framework, "resnet")
+            elif args.model == "gpu_ops":
+                models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
+            else:
+                models = [args.model]
+            
+            # Determine which precisions to test
+            if args.precision is None:
+                precisions = DEFAULT_PRECISIONS
+            elif isinstance(args.precision, list):
+                precisions = args.precision
+            else:
+                precisions = [args.precision]
+            
+            # Determine which batch sizes to test
+            if args.batch_size is None:
+                batch_sizes = DEFAULT_BATCH_SIZES
+            elif isinstance(args.batch_size, list):
+                batch_sizes = args.batch_size
+            else:
+                batch_sizes = [args.batch_size]
+            
+            # For ONNX, also test different execution providers
+            execution_providers = []
+            if framework == "onnx":
+                execution_providers = get_onnx_execution_providers()
+            else:
+                execution_providers = [None]
+            
+            # Calculate total combinations, accounting for skipped tests
+            for model in models:
+                for precision in precisions:
+                    for batch_size in batch_sizes:
+                        for execution_provider in execution_providers:
+                            # Skip FP16 on CPU
+                            if precision == "fp16" and not torch.cuda.is_available():
+                                continue
+                            # Skip FP16 for CPU execution provider in ONNX
+                            if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
+                                continue
+                            total += 1
         
         return total
 
     def _run_framework_comprehensive_benchmarks(self, args, start_test_num: int = 0, total_tests: int = 0) -> dict:
         """Run comprehensive benchmarks for a specific framework"""
         
+        # Determine which framework we're testing (take first if multiple)
+        if isinstance(args.framework, list):
+            framework = args.framework[0]  # This method handles one framework at a time
+        else:
+            framework = args.framework
+        
         # Determine which models to test
         if args.model is None:
             if args.use_case:
                 # Filter models by use case
-                models = get_models_for_use_case(args.use_case, args.framework)
+                models = get_models_for_use_case(args.use_case, framework)
             else:
                 # Test unique models only (no aliases) to avoid duplicates
-                models = get_unique_models(args.framework)
+                models = get_unique_models(framework)
+        elif isinstance(args.model, list):
+            models = args.model
         elif args.model in ["resnet", "resnet*"]:
-            models = self.get_available_models(args.framework, "resnet")
+            models = self.get_available_models(framework, "resnet")
         elif args.model == "gpu_ops":
             # Expand gpu_ops to all GPU operation models
             models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
@@ -440,18 +498,22 @@ class BenchmarkRunner:
         # Determine which precisions to test
         if args.precision is None:
             precisions = DEFAULT_PRECISIONS  # ["fp32", "fp16"]
+        elif isinstance(args.precision, list):
+            precisions = args.precision
         else:
             precisions = [args.precision]
         
         # Determine which batch sizes to test
         if args.batch_size is None:
             batch_sizes = DEFAULT_BATCH_SIZES  # [1, 4, 8, 16]
+        elif isinstance(args.batch_size, list):
+            batch_sizes = args.batch_size
         else:
             batch_sizes = [args.batch_size]
         
         # For ONNX, also test different execution providers
         execution_providers = []
-        if args.framework == "onnx":
+        if framework == "onnx":
             execution_providers = get_onnx_execution_providers()
         else:
             execution_providers = [None]  # No execution provider for other frameworks
@@ -471,7 +533,7 @@ class BenchmarkRunner:
                             continue
                         
                         # Skip FP16 for CPU execution provider in ONNX
-                        if args.framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
+                        if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
                             continue
                         
                         current_test += 1
@@ -485,19 +547,19 @@ class BenchmarkRunner:
                         
                         # Create test description
                         provider_info = f" ({execution_provider})" if execution_provider else ""
-                        test_desc = f"{args.framework}/{model} {precision} BS={batch_size}{provider_info}"
+                        test_desc = f"{framework}/{model} {precision} BS={batch_size}{provider_info}"
                         
                         # Show single line test status
                         print(f"[{current_test:3d}/{total_tests}] {test_desc:<60} ", end="", flush=True)
                         
                         result = self.run_single_benchmark(
-                            args.framework, model, args.mode, model_use_case,
+                            framework, model, args.mode, model_use_case,
                             precision, batch_size, execution_provider
                         )
                         
                         # Add metadata to result
                         result.update({
-                            "framework": args.framework,
+                            "framework": framework,
                             "model": model,
                             "mode": args.mode,
                             "use_case": model_use_case,
@@ -530,7 +592,7 @@ class BenchmarkRunner:
         
         # Print framework summary
         self.logger.info(f"\n{'='*80}")
-        self.logger.info(f"{args.framework.upper()} FRAMEWORK SUMMARY")
+        self.logger.info(f"{framework.upper()} FRAMEWORK SUMMARY")
         self.logger.info(f"{'='*80}")
         self.logger.info(f"Combinations tested: {len(framework_results)}")
         self.logger.success(f"Passed: {passed}")
@@ -540,7 +602,8 @@ class BenchmarkRunner:
         return {
             'results': framework_results,
             'passed': passed,
-            'failed': failed
+            'failed': failed,
+            'test_counter': current_test
         }
     
     def _print_performance_analysis(self, results: List[Dict[str, Any]]) -> None:
@@ -891,12 +954,102 @@ class BenchmarkRunner:
         # Print detailed results table
         self.results.print_summary_table(all_results)
 
+    def check_memory_requirements(self, args) -> None:
+        """Check memory requirements for planned benchmarks"""
+        print("=" * 60)
+        print("MEMORY REQUIREMENTS CHECK")
+        print("=" * 60)
+        
+        # Get GPU memory info
+        gpu_memory_info = get_gpu_memory_efficient()
+        if not gpu_memory_info or not gpu_memory_info.get("total_gpu_total_gb"):
+            print("❌ Could not detect GPU memory. Skipping memory check.")
+            return
+        
+        available_memory = gpu_memory_info["total_gpu_free_gb"]
+        total_memory = gpu_memory_info["total_gpu_total_gb"]
+        used_memory = gpu_memory_info["total_gpu_used_gb"]
+        
+        print(f"GPU Memory Status:")
+        print(f"  Total: {total_memory:.1f} GB")
+        print(f"  Used: {used_memory:.1f} GB")
+        print(f"  Available: {available_memory:.1f} GB")
+        print()
+        
+        # Determine what benchmarks would be run
+        frameworks = args.framework if args.framework else get_default_frameworks()
+        models = []
+        
+        if args.model:
+            models = args.model
+        elif args.use_case:
+            for framework in frameworks:
+                models.extend(get_models_for_use_case(args.use_case, framework))
+        else:
+            for framework in frameworks:
+                models.extend(get_unique_models(framework))
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_models = []
+        for model in models:
+            if model not in seen:
+                seen.add(model)
+                unique_models.append(model)
+        
+        precisions = args.precision if args.precision else DEFAULT_PRECISIONS
+        batch_sizes = args.batch_size if args.batch_size else DEFAULT_BATCH_SIZES
+        
+        print("Memory Requirements Analysis:")
+        print("-" * 60)
+        
+        total_configs = 0
+        safe_configs = 0
+        risky_configs = 0
+        
+        for model in unique_models:
+            print(f"\n{model.upper()}:")
+            for precision in precisions:
+                for batch_size in batch_sizes:
+                    total_configs += 1
+                    will_fit, required_memory, recommendation = check_memory_availability(
+                        model, precision, batch_size, available_memory, safety_margin=2.0
+                    )
+                    
+                    status_icon = "✅" if will_fit else "❌"
+                    risk_level = "SAFE" if will_fit else "RISKY"
+                    
+                    if will_fit:
+                        safe_configs += 1
+                    else:
+                        risky_configs += 1
+                    
+                    print(f"  {status_icon} {precision} BS={batch_size}: {required_memory:.1f}GB ({risk_level})")
+                    
+                    if not will_fit:
+                        print(f"      {recommendation}")
+        
+        print(f"\n" + "=" * 60)
+        print("SUMMARY:")
+        print(f"Total configurations: {total_configs}")
+        print(f"Safe configurations: {safe_configs} ({safe_configs/total_configs*100:.1f}%)")
+        print(f"Risky configurations: {risky_configs} ({risky_configs/total_configs*100:.1f}%)")
+        
+        if risky_configs > 0:
+            print(f"\n💡 RECOMMENDATIONS:")
+            print(f"   • Use --precision fp16 for better memory efficiency")
+            print(f"   • Use smaller batch sizes (--batch_size 1 2 4)")
+            print(f"   • For SD3, consider --cpu-offload flag")
+            print(f"   • Close other GPU applications to free memory")
+        
+        print("=" * 60)
+
 def main():
     parser = argparse.ArgumentParser(description="ML Model Benchmarking Framework")
-    parser.add_argument("--framework", type=str, 
+    parser.add_argument("--framework", type=str, nargs='*',
                        choices=["pytorch", "onnx", "tensorflow"],
                        help="ML framework to benchmark (default: all available)")
-    parser.add_argument("--model", type=str,
+    parser.add_argument("--model", type=str, nargs='*',
                        help="Model name (e.g., resnet50, resnet for all resnet models, default: all available)")
     parser.add_argument("--mode", type=str,
                        choices=["inference", "training"],
@@ -904,13 +1057,20 @@ def main():
     parser.add_argument("--use_case", type=str,
                        choices=["classification", "detection", "segmentation", "generation", "compute"],
                        help="Use case for the benchmark (default: classification)")
-    parser.add_argument("--precision", type=str,
+    parser.add_argument("--precision", type=str, nargs='*',
                        choices=["fp32", "fp16", "mixed", "int8"],
                        help="Precision for inference (default: all available)")
-    parser.add_argument("--batch_size", type=int,
+    parser.add_argument("--batch_size", type=int, nargs='*',
                        help="Batch size for inference (default: test multiple sizes)")
     parser.add_argument("--output_dir", type=str, default="benchmark_results",
                        help="Directory to save benchmark results")
+    parser.add_argument("--comprehensive", action="store_true",
+                       help="Run comprehensive benchmarks across all configurations")
+    parser.add_argument("--execution_provider", type=str,
+                       choices=get_onnx_execution_providers(),
+                       help="ONNX execution provider (default: auto-detect best)")
+    parser.add_argument("--check-memory", action="store_true",
+                       help="Check memory requirements for planned benchmarks without running them")
     
     args = parser.parse_args()
     
@@ -920,15 +1080,22 @@ def main():
     if args.use_case is None:
         # Intelligently determine use case based on model if specified
         if args.model:
-            args.use_case = get_default_use_case_for_model(args.model)
+            args.use_case = get_default_use_case_for_model(args.model[0] if isinstance(args.model, list) else args.model)
         else:
             args.use_case = "classification"
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # Run benchmarks
+    # Create runner
     runner = BenchmarkRunner()
+    
+    # Check memory requirements if requested
+    if getattr(args, 'check_memory', False):
+        runner.check_memory_requirements(args)
+        return
+    
+    # Run benchmarks
     runner.run_benchmarks(args)
 
 if __name__ == "__main__":
