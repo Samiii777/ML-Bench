@@ -1,0 +1,152 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# PyTorch
+*.pth
+*.pt
+
+# ONNX models
+*.onnx
+
+# Benchmark results
+benchmark_results/
+results/
+logs/
+*.log
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# celery beat schedule file
+celerybeat-schedule
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Model downloads
+models/
+checkpoints/
+weights/
+
+# Data files (if large)
+data/*.jpg
+data/*.png
+data/*.jpeg
+data/*.gif
+data/*.bmp
+data/*.tiff
+data/*.webp
+
+# Hugging Face cache
+.cache/
+transformers_cache/
+huggingface_hub/
+
+# CUDA cache
+.nv/
+
+# Large model files (prevent accidental commits)
+*.safetensors
+*.bin
+*.h5
+*.pkl
+*.pickle
+
+# Downloaded model files
+**/models/**/*.onnx
+**/models/**/*.pth
+**/models/**/*.pt
+**/models/**/*.safetensors
+**/models/**/*.bin 
