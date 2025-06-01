@@ -8,6 +8,20 @@ import time
 import sys
 import numpy as np
 
+# Add project root to path for utils import
+import sys
+from pathlib import Path
+project_root = Path(__file__).resolve()
+for parent in project_root.parents:
+    if (parent / "benchmark.py").exists():
+        if str(parent) not in sys.path:
+            sys.path.insert(0, str(parent))
+        break
+
+# Clean import of utils - no ugly relative paths!
+import utils
+from utils.download import get_imagenet_classes_path, get_sample_image_path
+
 # Simple device utilities - everything in one place
 def get_device():
     """Get the best available device (CUDA, MPS, or CPU)"""
@@ -87,25 +101,15 @@ def download_file(url, filename):
 
 def get_imagenet_classes_path():
     """Get path to ImageNet classes file"""
-    # Use shared data directory at project root
-    data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "data")
-    data_dir = os.path.abspath(data_dir)
-    os.makedirs(data_dir, exist_ok=True)
-    
-    filename = os.path.join(data_dir, "imagenet_classes.txt")
-    download_file("https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt", filename)
-    return filename
+    # Use the clean utils function instead of ugly relative paths
+    from utils.download import get_imagenet_classes_path as utils_get_path
+    return utils_get_path()
 
 def get_sample_image_path():
     """Get path to sample image"""
-    # Use shared data directory at project root
-    data_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", "..", "data")
-    data_dir = os.path.abspath(data_dir)
-    os.makedirs(data_dir, exist_ok=True)
-    
-    filename = os.path.join(data_dir, "dog.jpg")
-    download_file("https://github.com/pytorch/hub/raw/master/images/dog.jpg", filename)
-    return filename
+    # Use the clean utils function instead of ugly relative paths  
+    from utils.download import get_sample_image_path as utils_get_path
+    return utils_get_path()
 
 def load_categories(filename):
     """Load the categories from the given file"""

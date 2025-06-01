@@ -15,8 +15,19 @@ import torch
 from PIL import Image
 from datetime import datetime
 
-# Add utils to path for shared utilities
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', 'utils'))
+# Add project root to path for utils import
+import sys
+from pathlib import Path
+project_root = Path(__file__).resolve()
+for parent in project_root.parents:
+    if (parent / "benchmark.py").exists():
+        if str(parent) not in sys.path:
+            sys.path.insert(0, str(parent))
+        break
+
+# Clean import of utils - no ugly relative paths!
+import utils
+from utils.shared_device_utils import get_gpu_memory_efficient
 
 def get_gpu_memory_nvidia_smi():
     """Get GPU memory using nvidia-smi directly"""

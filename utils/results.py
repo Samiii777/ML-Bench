@@ -44,19 +44,22 @@ class BenchmarkResults:
     
     def _save_json(self, results: List[Dict[str, Any]], filepath: Path, args) -> None:
         """Save results as JSON"""
+        metadata = {
+            "timestamp": datetime.now().isoformat(),
+            "framework": args.framework,
+            "model": args.model,
+            "mode": args.mode,
+            "usecase": args.usecase,
+            "precision": args.precision,
+            "batch_size": args.batch_size,
+            "total_results": len(results),
+            "passed": len([r for r in results if r["status"] == "PASS"]),
+            "failed": len([r for r in results if r["status"] == "FAIL"]),
+            "skipped": len([r for r in results if r["status"] == "SKIP"])
+        }
+        
         output_data = {
-            "benchmark_info": {
-                "framework": args.framework,
-                "model": args.model,
-                "mode": args.mode,
-                "use_case": args.use_case,
-                "precision": args.precision,
-                "batch_size": args.batch_size,
-                "timestamp": datetime.now().isoformat(),
-                "total_benchmarks": len(results),
-                "passed": sum(1 for r in results if r["status"] == "PASS"),
-                "failed": sum(1 for r in results if r["status"] == "FAIL")
-            },
+            "benchmark_info": metadata,
             "results": results
         }
         
@@ -75,7 +78,7 @@ class BenchmarkResults:
                 "framework": result.get("framework", ""),
                 "model": result.get("model", ""),
                 "mode": result.get("mode", ""),
-                "use_case": result.get("use_case", ""),
+                "usecase": result.get("usecase", ""),
                 "precision": result.get("precision", ""),
                 "batch_size": result.get("batch_size", ""),
                 "status": result.get("status", ""),
@@ -109,7 +112,7 @@ class BenchmarkResults:
             f.write(f"Framework: {args.framework}\n")
             f.write(f"Model: {args.model}\n")
             f.write(f"Mode: {args.mode}\n")
-            f.write(f"Use Case: {args.use_case}\n")
+            f.write(f"Use Case: {args.usecase}\n")
             f.write(f"Precision: {args.precision}\n")
             f.write(f"Batch Size: {args.batch_size}\n")
             f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
@@ -200,7 +203,7 @@ class BenchmarkResults:
             model = result.get("model", "unknown")
             precision = result.get("precision", "")
             batch_size = result.get("batch_size", "")
-            use_case = result.get("use_case", "")
+            usecase = result.get("usecase", "")
             execution_provider = result.get("execution_provider")
             metrics = result.get("metrics", {})
             
@@ -211,7 +214,7 @@ class BenchmarkResults:
                 provider_suffix = f" ({provider})"
             
             # Get performance metrics based on use case
-            if use_case == "compute":
+            if usecase == "compute":
                 # For compute use cases, show GFLOPS or GB/s
                 if metrics.get("best_gflops"):
                     performance_str = f"{metrics['best_gflops']:.1f} GFLOPS"
@@ -235,20 +238,64 @@ class BenchmarkResults:
             print("No results to display")
             return
         
-        # Filter out failed results for the table
+        # Separate results by status
         passed_results = [r for r in results if r.get("status") == "PASS"]
+        failed_results = [r for r in results if r.get("status") == "FAIL"]
+        skipped_results = [r for r in results if r.get("status") == "SKIP"]
         
+        print(f"\n{'='*150}")
+        print(" " * 60 + "Benchmark Results Summary")
+        print(f"{'='*150}")
+        
+        # Print status summary
+        total = len(results)
+        print(f"Total configurations: {total}")
+        print(f"✅ Passed: {len(passed_results)}")
+        print(f"❌ Failed: {len(failed_results)}")
+        print(f"⚠️  Skipped: {len(skipped_results)}")
+        
+        if len(passed_results) + len(failed_results) > 0:
+            success_rate = len(passed_results) / (len(passed_results) + len(failed_results)) * 100
+            print(f"Success rate: {success_rate:.1f}% (of attempted tests)")
+        
+        if len(skipped_results) > 0:
+            skip_rate = len(skipped_results) / total * 100
+            print(f"Skip rate: {skip_rate:.1f}% (intelligent memory management)")
+        
+        # Show skipped configurations summary
+        if skipped_results:
+            print(f"\n{'='*80}")
+            print("SKIPPED CONFIGURATIONS (VRAM Requirements)")
+            print(f"{'='*80}")
+            
+            for result in skipped_results:
+                model = result.get("model", "unknown")
+                precision = result.get("precision", "")
+                batch_size = result.get("batch_size", "")
+                
+                # Check for different skip reasons
+                skip_reason = result.get("metrics", {}).get("skip_reason", "unknown")
+                if skip_reason == "insufficient_vram":
+                    required_memory = result.get("metrics", {}).get("required_memory_gb", 0)
+                    print(f"⚠️  {model} {precision} BS={batch_size} - Required: {required_memory:.1f}GB")
+                elif skip_reason == "vram_insufficient":
+                    vram_req = result.get("metrics", {}).get("vram_requirement", "unknown")
+                    print(f"⚠️  {model} {precision} BS={batch_size} - Required: {vram_req}")
+                else:
+                    print(f"⚠️  {model} {precision} BS={batch_size} - {result.get('error', 'Unknown reason')}")
+        
+        # Show successful results table
         if not passed_results:
-            print("No successful results to display")
+            print("\nNo successful results to display in table")
             return
         
         print(f"\n{'='*150}")
-        print(" " * 60 + "Benchmark Results")
-        print(f"\n{'='*150}")
+        print(" " * 55 + "SUCCESSFUL BENCHMARK RESULTS")
+        print(f"{'='*150}")
         
         # Create table data
         table_data = []
-        headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "Use Case", "Performance", "Latency", "Memory", "Device"]
+        headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
         
         for result in passed_results:
             # Create test name
@@ -260,10 +307,10 @@ class BenchmarkResults:
             metrics = result.get("metrics", {})
             
             # Determine performance metric based on use case and available metrics
-            use_case = result.get("use_case", "")
+            usecase = result.get("usecase", "")
             performance_str = "N/A"
             
-            if use_case == "compute":
+            if usecase == "compute":
                 # For compute use cases, prefer GFLOPS or GB/s over samples/sec
                 if metrics.get("best_gflops"):
                     performance_str = f"{metrics['best_gflops']:.1f} GFLOPS"
@@ -311,7 +358,7 @@ class BenchmarkResults:
                 result.get("mode", ""),
                 result.get("precision", ""),
                 str(result.get("batch_size", "")),
-                use_case,
+                usecase,
                 performance_str,
                 latency_str,
                 memory_str,
@@ -377,7 +424,7 @@ class BenchmarkResults:
             return
         
         # Create table data
-        headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "Use Case", "Performance", "Latency", "Memory", "Device"]
+        headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
         table_data = []
         
         for result in passed_results:
@@ -390,10 +437,10 @@ class BenchmarkResults:
             metrics = result.get("metrics", {})
             
             # Determine performance metric based on use case and available metrics
-            use_case = result.get("use_case", "")
+            usecase = result.get("usecase", "")
             performance_str = "N/A"
             
-            if use_case == "compute":
+            if usecase == "compute":
                 # For compute use cases, prefer GFLOPS or GB/s over samples/sec
                 if metrics.get("best_gflops"):
                     performance_str = f"{metrics['best_gflops']:.1f} GFLOPS"
@@ -441,7 +488,7 @@ class BenchmarkResults:
                 result.get("mode", ""),
                 result.get("precision", ""),
                 str(result.get("batch_size", "")),
-                use_case,
+                usecase,
                 performance_str,
                 latency_str,
                 memory_str,
@@ -508,8 +555,8 @@ class BenchmarkResults:
             best_latency = min(model_results, key=lambda x: x["metrics"].get("avg_latency_ms", float('inf')))
             
             # Check if this is a compute model (GPU ops)
-            use_case = model_results[0].get("use_case", "")
-            if use_case == "compute":
+            usecase = model_results[0].get("usecase", "")
+            if usecase == "compute":
                 # For compute models, show GFLOPS or GB/s
                 best_gflops = max(model_results, key=lambda x: x["metrics"].get("best_gflops", 0))
                 best_bandwidth = max(model_results, key=lambda x: x["metrics"].get("best_bandwidth_gbs", 0))
@@ -535,7 +582,7 @@ class BenchmarkResults:
                 f.write("Precision Comparison (BS=1):\n")
                 for result in bs1_results:
                     precision = result["precision"]
-                    if use_case == "compute":
+                    if usecase == "compute":
                         if result["metrics"].get("best_gflops"):
                             f.write(f"  {precision}: {result['metrics']['best_gflops']:.1f} GFLOPS\n")
                         elif result["metrics"].get("best_bandwidth_gbs"):

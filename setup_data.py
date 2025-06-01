@@ -8,9 +8,8 @@ import sys
 import os
 from pathlib import Path
 
-# Add utils to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
-
+# Clean import of utils - no ugly relative paths!
+import utils
 from utils.download import download_all_common_files, list_data_files, get_data_dir
 
 def main():

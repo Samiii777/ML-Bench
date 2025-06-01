@@ -73,20 +73,33 @@ python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 
 ## 🚀 Quick Start
 
-### Run a Single Benchmark
+### Run Comprehensive Benchmarks (Default)
+
+```bash
+# Run all models across all use cases (comprehensive)
+python3 benchmark.py
+
+# Run all models with specific precision
+python3 benchmark.py --precision fp16
+
+# Run all models with specific batch sizes
+python3 benchmark.py --batch_size 1 4
+```
+
+### Run Specific Benchmarks
 
 ```bash
 # Basic ResNet-50 benchmark
 python benchmark.py --framework pytorch --model resnet50 --precision fp16 --batch_size 4
 
 # Stable Diffusion generation benchmark
-python benchmark.py --use_case generation --precision fp16
+python benchmark.py --usecase generation --precision fp16
 
 # GPU compute operations benchmark
-python benchmark.py --use_case compute --model gemm_ops --precision fp16
+python benchmark.py --usecase compute --model gemm_ops --precision fp16
 ```
 
-### Run Comprehensive Benchmarks
+### Run Framework-Specific Comprehensive Benchmarks
 
 ```bash
 # Test all models with default settings
@@ -96,7 +109,7 @@ python benchmark.py --comprehensive
 python benchmark.py --framework pytorch --comprehensive
 
 # Test specific use case comprehensively
-python benchmark.py --use_case classification --comprehensive
+python benchmark.py --usecase classification --comprehensive
 ```
 
 ### Quick Performance Test
@@ -148,13 +161,13 @@ python benchmark.py --framework pytorch --model resnet50 --precision fp32 fp16 m
 
 ```bash
 # Image classification benchmarks
-python benchmark.py --use_case classification --framework pytorch
+python benchmark.py --usecase classification --framework pytorch
 
 # Text-to-image generation benchmarks
-python benchmark.py --use_case generation --precision fp16
+python benchmark.py --usecase generation --precision fp16
 
 # GPU compute benchmarks
-python benchmark.py --use_case compute --framework pytorch --precision fp16
+python benchmark.py --usecase compute --framework pytorch --precision fp16
 ```
 
 ### Framework Comparison
@@ -164,7 +177,7 @@ python benchmark.py --use_case compute --framework pytorch --precision fp16
 python benchmark.py --framework pytorch onnx --model resnet50 --precision fp16 --batch_size 4
 
 # Compare all frameworks for classification
-python benchmark.py --use_case classification --framework pytorch onnx --comprehensive
+python benchmark.py --usecase classification --framework pytorch onnx --comprehensive
 ```
 
 ### Advanced Configuration
@@ -177,10 +190,10 @@ python benchmark.py --framework onnx --model resnet50 --execution_provider Tenso
 python benchmark.py --comprehensive --output_dir custom_results/
 
 # Memory-optimized Stable Diffusion
-python benchmark.py --use_case generation --model sd15 --precision fp16 --batch_size 1
+python benchmark.py --usecase generation --model sd15 --precision fp16 --batch_size 1
 ```
 
-## 📈 Benchmark Results
+## 🎯 Benchmark Results
 
 ### Output Formats
 
@@ -224,14 +237,13 @@ benchmark_results/
 
 ```
 ML-Bench/
-├── benchmark.py                    # Main benchmarking script
+├── benchmark.py                    # Main benchmarking script (1,104 lines)
 ├── requirements.txt                # Python dependencies
 ├── setup_data.py                   # Model and data setup
 ├── README.md                       # This file
-├── CONTRIBUTING.md                 # Contribution guidelines
 ├── LICENSE                         # Project license
 │
-├── utils/                          # Core utilities
+├── utils/                          # Core utilities (194 lines total)
 │   ├── config.py                   # Model and framework configuration
 │   ├── logger.py                   # Colored logging system
 │   ├── results.py                  # Results processing and output
@@ -255,7 +267,7 @@ ML-Bench/
 ### Key Components
 
 - **`benchmark.py`**: Main orchestrator handling test execution and result aggregation
-- **`utils/config.py`**: Central configuration for models, frameworks, and execution providers
+- **`utils/config.py`**: Central configuration for models, frameworks, and simple VRAM checking
 - **`utils/results.py`**: Comprehensive result processing and output generation
 - **`benchmarks/{framework}/`**: Framework-specific benchmark implementations
 
@@ -272,7 +284,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for deta
 
 ### Adding New Models
 
-1. Create benchmark script: `benchmarks/{framework}/{model_family}/{mode}/{use_case}/main.py`
+1. Create benchmark script: `benchmarks/{framework}/{model_family}/{mode}/{usecase}/main.py`
 2. Update configuration: Add model to `utils/config.py`
 3. Follow existing patterns for argument parsing and output formatting
 4. Test with the main framework: `python benchmark.py --model your_model`
@@ -291,7 +303,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for deta
 
 ```bash
 # For large models like Stable Diffusion 3
-python benchmark.py --use_case generation --model sd3 --precision fp16 --batch_size 1
+python benchmark.py --usecase generation --model sd3 --precision fp16 --batch_size 1
 
 # Enable CPU offload for SD3 if needed
 python benchmarks/pytorch/stable_diffusion/inference/generation/main.py --model sd3 --cpu-offload
@@ -365,6 +377,34 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Ready to benchmark?** Start with: `python benchmark.py --framework pytorch --model resnet18 --precision fp16 --batch_size 4`
+**Ready to benchmark?** Start with: `python3 benchmark.py` for comprehensive testing across all models and use cases, or `python3 benchmark.py --framework pytorch --model resnet18 --precision fp16 --batch_size 4` for specific model testing.
 
 For more examples and advanced usage, see our [documentation](docs/) and [examples](examples/) directories.
+
+## Memory Management
+
+**Simple VRAM checking is enabled by default** to prevent out-of-memory crashes by skipping Stable Diffusion configurations that require more VRAM than available.
+
+### How It Works
+
+- **Large models** (Stable Diffusion): Checked against available VRAM and skipped if insufficient
+- **Small models** (ResNet, GPU operations): Run without VRAM checking as they use minimal memory
+
+### VRAM Requirements Table
+
+| Model | FP32 | FP16 | Mixed |
+|-------|------|------|-------|
+| Stable Diffusion 1.5 | 12.0GB | 6.0GB | 9.0GB |
+| Stable Diffusion 3 | >24GB | 20.0GB | >24GB |
+
+*Requirements scale with batch size (each additional batch adds ~80% more VRAM)*
+
+```bash
+# SD3 FP32 will be skipped automatically
+python3 benchmark.py --model sd3 --precision fp32 --batch_size 1
+# ⚠️  SKIPPED - VRAM insufficient: Requires >24GB VRAM (available: 23.4GB)
+
+# SD3 FP16 will run if you have enough VRAM
+python3 benchmark.py --model sd3 --precision fp16 --batch_size 1
+# ✓ 1.00 samples/sec
+``` 

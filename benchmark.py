@@ -15,11 +15,10 @@ import subprocess
 from typing import Dict, List, Any
 import torch
 
-# Add utils to path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'utils'))
-
+# Clean import of utils - no ugly relative paths!
+import utils
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, check_memory_availability, get_memory_requirement
+from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
 
@@ -82,24 +81,28 @@ class BenchmarkRunner:
                 "metrics": {}
             }
         
-        # Pre-flight memory check for GPU benchmarks
+        # Simple VRAM check for GPU benchmarks (only for large models like Stable Diffusion)
         if framework == "pytorch" and torch.cuda.is_available():
-            gpu_memory_info = get_gpu_memory_efficient()
-            if gpu_memory_info and gpu_memory_info.get("total_gpu_total_gb"):
-                available_memory = gpu_memory_info["total_gpu_free_gb"]
-                total_memory = gpu_memory_info["total_gpu_total_gb"]
+            gpu_info = get_gpu_memory_efficient()
+            if gpu_info and gpu_info.get("total_gpu_free_gb"):
+                available_vram = gpu_info["total_gpu_free_gb"]
+                should_skip, reason = should_skip_for_vram(model, precision, batch_size, available_vram)
                 
-                # Check if configuration will fit in memory
-                will_fit, required_memory, recommendation = check_memory_availability(
-                    model, precision, batch_size, available_memory, safety_margin=2.0
-                )
-                
-                if not will_fit:
-                    # Log the memory issue but don't fail immediately - let the benchmark try
-                    self.logger.warning(f"Memory warning for {model} {precision} BS={batch_size}: {recommendation}")
-                    # Still proceed with the benchmark - it might work with optimizations
+                if should_skip:
+                    vram_req = get_vram_requirement(model, precision, batch_size)
+                    return {
+                        "status": "SKIP",
+                        "error": f"VRAM insufficient: {reason}",
+                        "execution_time": 0,
+                        "metrics": {
+                            "vram_requirement": vram_req,
+                            "skip_reason": "vram_insufficient"
+                        }
+                    }
                 else:
-                    self.logger.info(f"Memory check passed for {model} {precision} BS={batch_size}: requires {required_memory:.1f}GB, {available_memory:.1f}GB available")
+                    self.logger.debug(f"VRAM check passed for {model} {precision} BS={batch_size}: {reason}")
+            else:
+                self.logger.debug(f"Could not check VRAM - running {model} {precision} BS={batch_size} without pre-checks")
         
         # Prepare command
         cmd = [
@@ -135,6 +138,7 @@ class BenchmarkRunner:
                 # Add execution provider to metrics if available
                 if execution_provider:
                     metrics['execution_provider'] = execution_provider
+                
                 return {
                     "status": "PASS",
                     "execution_time": execution_time,
@@ -147,8 +151,7 @@ class BenchmarkRunner:
                 error_output = result.stderr.lower()
                 if "out of memory" in error_output or "cuda out of memory" in error_output:
                     # Provide helpful OOM guidance
-                    required_memory = get_memory_requirement(model, precision, batch_size)
-                    error_msg = f"CUDA Out of Memory (estimated requirement: {required_memory:.1f}GB). Try: reduce batch size, use fp16 precision, or enable CPU offload"
+                    error_msg = f"CUDA Out of Memory. Try: reduce batch size, use fp16 precision, or enable CPU offload"
                 else:
                     error_msg = f"Script failed with return code {result.returncode}"
                 
@@ -329,31 +332,25 @@ class BenchmarkRunner:
         
         # Determine frameworks to test
         if args.framework:
-            # Handle both single framework and list of frameworks
             if isinstance(args.framework, list):
                 frameworks = args.framework
             else:
                 frameworks = [args.framework]
-        elif args.model:
-            # Handle both single model and list of models
-            model_name = args.model[0] if isinstance(args.model, list) else args.model
-            frameworks = get_available_frameworks_for_model(model_name)
-        elif args.use_case:
-            frameworks = get_available_frameworks_for_use_case(args.use_case)
         else:
-            frameworks = get_default_frameworks()
+            # Default to pytorch when no framework is specified
+            frameworks = ["pytorch"]
         
         print(f"Frameworks: {frameworks}")
         
         # Determine use case
-        if args.use_case:
-            use_case = args.use_case
+        if args.usecase:
+            use_case = args.usecase
         elif args.model:
             # Handle both single model and list of models
             model_name = args.model[0] if isinstance(args.model, list) else args.model
             use_case = get_default_use_case_for_model(model_name)
         else:
-            use_case = "classification"
+            use_case = "all (comprehensive)"
         
         print(f"Use case: {use_case}")
         
@@ -365,6 +362,9 @@ class BenchmarkRunner:
         # Run tests for each framework
         all_results = []
         test_counter = 0
+        total_passed = 0
+        total_failed = 0
+        total_skipped = 0
         
         for framework in frameworks:
             print(f"{'='*100}")
@@ -378,6 +378,9 @@ class BenchmarkRunner:
             framework_results = self._run_framework_comprehensive_benchmarks(framework_args, test_counter, total_tests)
             all_results.extend(framework_results["results"])
             test_counter = framework_results["test_counter"]
+            total_passed += framework_results["passed"]
+            total_failed += framework_results["failed"]
+            total_skipped += framework_results["skipped"]
         
         # Save and display results
         self.results.save_results(all_results, args)
@@ -389,13 +392,21 @@ class BenchmarkRunner:
         print(f"Frameworks tested: {frameworks}")
         
         total_tests_run = len(all_results)
-        passed_tests = len([r for r in all_results if r["status"] == "PASS"])
-        failed_tests = total_tests_run - passed_tests
+        attempted_tests = total_passed + total_failed
         
-        print(f"Total combinations tested: {total_tests_run}")
-        print(f"Total passed: {passed_tests}")
-        print(f"Total failed: {failed_tests}")
-        print(f"Overall success rate: {(passed_tests/total_tests_run)*100:.1f}%")
+        print(f"Total combinations: {total_tests_run}")
+        print(f"Passed: {total_passed}")
+        print(f"Failed: {total_failed}")
+        print(f"Skipped: {total_skipped}")
+        
+        if attempted_tests > 0:
+            success_rate = (total_passed / attempted_tests) * 100
+            print(f"Success rate: {success_rate:.1f}% (of attempted tests)")
+        
+        if total_skipped > 0:
+            skip_rate = (total_skipped / total_tests_run) * 100
+            print(f"Skip rate: {skip_rate:.1f}% (intelligent memory management)")
+        
         print()
         
         # Print detailed results table
@@ -410,25 +421,27 @@ class BenchmarkRunner:
             else:
                 frameworks = [args.framework]
         else:
-            frameworks = get_default_frameworks()
+            # Default to pytorch when no framework is specified
+            frameworks = ["pytorch"]
         
         total = 0
         for framework in frameworks:
-            # Determine which models to test
-            if args.model is None:
-                if args.use_case:
-                    # Filter models by use case
-                    models = get_models_for_use_case(args.use_case, framework)
+            # Determine which models to test - prioritize --model over --usecase
+            if args.model is not None:
+                if isinstance(args.model, list):
+                    models = args.model
+                elif args.model in ["resnet", "resnet*"]:
+                    models = self.get_available_models(framework, "resnet")
+                elif args.model == "gpu_ops":
+                    models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
                 else:
-                    models = get_unique_models(framework)
-            elif isinstance(args.model, list):
-                models = args.model
-            elif args.model in ["resnet", "resnet*"]:
-                models = self.get_available_models(framework, "resnet")
-            elif args.model == "gpu_ops":
-                models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
+                    models = [args.model]
+            elif args.usecase:
+                # Filter models by usecase only if no specific model was requested
+                models = get_models_for_use_case(args.usecase, framework)
             else:
-                models = [args.model]
+                # Test unique models only (no aliases) to avoid duplicates
+                models = get_unique_models(framework)
             
             # Determine which precisions to test
             if args.precision is None:
@@ -477,23 +490,23 @@ class BenchmarkRunner:
         else:
             framework = args.framework
         
-        # Determine which models to test
-        if args.model is None:
-            if args.use_case:
-                # Filter models by use case
-                models = get_models_for_use_case(args.use_case, framework)
+        # Determine which models to test - prioritize --model over --usecase
+        if args.model is not None:
+            if isinstance(args.model, list):
+                models = args.model
+            elif args.model in ["resnet", "resnet*"]:
+                models = self.get_available_models(framework, "resnet")
+            elif args.model == "gpu_ops":
+                # Expand gpu_ops to all GPU operation models
+                models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
             else:
-                # Test unique models only (no aliases) to avoid duplicates
-                models = get_unique_models(framework)
-        elif isinstance(args.model, list):
-            models = args.model
-        elif args.model in ["resnet", "resnet*"]:
-            models = self.get_available_models(framework, "resnet")
-        elif args.model == "gpu_ops":
-            # Expand gpu_ops to all GPU operation models
-            models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
+                models = [args.model]
+        elif args.usecase:
+            # Filter models by usecase only if no specific model was requested
+            models = get_models_for_use_case(args.usecase, framework)
         else:
-            models = [args.model]
+            # Test unique models only (no aliases) to avoid duplicates
+            models = get_unique_models(framework)
         
         # Determine which precisions to test
         if args.precision is None:
@@ -520,6 +533,7 @@ class BenchmarkRunner:
         
         passed = 0
         failed = 0
+        skipped = 0
         framework_results = []
         
         current_test = start_test_num
@@ -538,12 +552,12 @@ class BenchmarkRunner:
                         
                         current_test += 1
                         
-                        # Determine the appropriate use case for this specific model
-                        # If user specified a use case, use that; otherwise use model's default
-                        if args.use_case:
-                            model_use_case = args.use_case
+                        # Determine the appropriate usecase for this specific model
+                        # If user specified a usecase, use that; otherwise use model's default
+                        if args.usecase:
+                            model_usecase = args.usecase
                         else:
-                            model_use_case = get_default_use_case_for_model(model)
+                            model_usecase = get_default_use_case_for_model(model)
                         
                         # Create test description
                         provider_info = f" ({execution_provider})" if execution_provider else ""
@@ -553,7 +567,7 @@ class BenchmarkRunner:
                         print(f"[{current_test:3d}/{total_tests}] {test_desc:<60} ", end="", flush=True)
                         
                         result = self.run_single_benchmark(
-                            framework, model, args.mode, model_use_case,
+                            framework, model, args.mode, model_usecase,
                             precision, batch_size, execution_provider
                         )
                         
@@ -562,7 +576,7 @@ class BenchmarkRunner:
                             "framework": framework,
                             "model": model,
                             "mode": args.mode,
-                            "use_case": model_use_case,
+                            "usecase": model_usecase,
                             "precision": precision,
                             "batch_size": batch_size,
                             "execution_provider": execution_provider,
@@ -575,7 +589,7 @@ class BenchmarkRunner:
                             passed += 1
                             # Show performance metric on the same line
                             metrics = result["metrics"]
-                            if model_use_case == "compute":
+                            if model_usecase == "compute":
                                 if metrics.get("best_gflops"):
                                     print(f"✓ {metrics['best_gflops']:.1f} GFLOPS")
                                 elif metrics.get("best_bandwidth_gbs"):
@@ -586,23 +600,38 @@ class BenchmarkRunner:
                             else:
                                 throughput = metrics.get("throughput_fps", 0)
                                 print(f"✓ {throughput:.2f} samples/sec")
+                        elif result["status"] == "SKIP":
+                            skipped += 1
+                            skip_reason = result["metrics"].get("skip_reason", "unknown")
+                            required_memory = result["metrics"].get("required_memory_gb", 0)
+                            if skip_reason == "insufficient_vram":
+                                print(f"⚠ SKIPPED - Insufficient VRAM ({required_memory:.1f}GB required)")
+                            else:
+                                print(f"⚠ SKIPPED - {result.get('error', 'Unknown reason')}")
                         else:
                             failed += 1
                             print(f"✗ FAILED - {result.get('error', 'Unknown error')}")
         
-        # Print framework summary
+        # Print framework summary with memory management stats
         self.logger.info(f"\n{'='*80}")
         self.logger.info(f"{framework.upper()} FRAMEWORK SUMMARY")
         self.logger.info(f"{'='*80}")
         self.logger.info(f"Combinations tested: {len(framework_results)}")
         self.logger.success(f"Passed: {passed}")
+        self.logger.warning(f"Skipped: {skipped}")
         self.logger.error(f"Failed: {failed}")
-        self.logger.info(f"Success rate: {(passed/len(framework_results))*100:.1f}%")
+        
+        # Calculate success rate based on attempted tests (excluding skipped)
+        attempted = passed + failed
+        if attempted > 0:
+            success_rate = (passed / attempted) * 100
+            self.logger.info(f"Success rate: {success_rate:.1f}% (of attempted tests)")
         
         return {
             'results': framework_results,
             'passed': passed,
             'failed': failed,
+            'skipped': skipped,
             'test_counter': current_test
         }
     
@@ -721,7 +750,7 @@ class BenchmarkRunner:
                     # For compute operations, prioritize GFLOPS, then bandwidth, then throughput
                     def get_performance_score(result):
                         metrics = result["metrics"]
-                        use_case = result.get("use_case", "")
+                        use_case = result.get("usecase", "")
                         
                         if use_case == "compute":
                             if metrics.get("best_gflops"):
@@ -737,7 +766,7 @@ class BenchmarkRunner:
                     
                     # Get the appropriate performance metric and unit
                     metrics = best_result["metrics"]
-                    use_case = best_result.get("use_case", "")
+                    use_case = best_result.get("usecase", "")
                     
                     if use_case == "compute":
                         if metrics.get("best_gflops"):
@@ -781,7 +810,7 @@ class BenchmarkRunner:
                     # Calculate performance using appropriate metrics
                     def get_performance_score(result):
                         metrics = result["metrics"]
-                        use_case = result.get("use_case", "")
+                        use_case = result.get("usecase", "")
                         
                         if use_case == "compute":
                             if metrics.get("best_gflops"):
@@ -800,7 +829,7 @@ class BenchmarkRunner:
                     
                     # Determine the unit for this framework's best result
                     best_metrics = best_result["metrics"]
-                    best_use_case = best_result.get("use_case", "")
+                    best_use_case = best_result.get("usecase", "")
                     
                     if best_use_case == "compute":
                         if best_metrics.get("best_gflops"):
@@ -832,26 +861,33 @@ class BenchmarkRunner:
     
     def _run_specific_benchmarks(self, args) -> None:
         """Run specific benchmarks when all parameters are provided"""
+        
+        # Extract single values from lists if needed (due to nargs='*')
+        framework = args.framework[0] if isinstance(args.framework, list) else args.framework
+        model = args.model[0] if isinstance(args.model, list) else args.model
+        precision = args.precision[0] if isinstance(args.precision, list) else args.precision
+        batch_size = args.batch_size[0] if isinstance(args.batch_size, list) else args.batch_size
+        
         self.logger.info("Starting benchmark run")
-        self.logger.info(f"Framework: {args.framework}")
-        self.logger.info(f"Model: {args.model}")
+        self.logger.info(f"Framework: {framework}")
+        self.logger.info(f"Model: {model}")
         self.logger.info(f"Mode: {args.mode}")
-        self.logger.info(f"Use case: {args.use_case}")
-        self.logger.info(f"Precision: {args.precision}")
-        self.logger.info(f"Batch size: {args.batch_size}")
+        self.logger.info(f"Use case: {args.usecase}")
+        self.logger.info(f"Precision: {precision}")
+        self.logger.info(f"Batch size: {batch_size}")
         
         # Determine which models to run
-        if args.model in ["resnet", "resnet*"]:
-            models = self.get_available_models(args.framework, "resnet")
-        elif args.model == "gpu_ops":
+        if model in ["resnet", "resnet*"]:
+            models = self.get_available_models(framework, "resnet")
+        elif model == "gpu_ops":
             # Expand gpu_ops to all GPU operation models
             models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
         else:
-            models = [args.model]
+            models = [model]
         
         # For ONNX, test all execution providers
         execution_providers = []
-        if args.framework == "onnx":
+        if framework == "onnx":
             execution_providers = get_onnx_execution_providers()
         else:
             execution_providers = [None]  # No execution provider for other frameworks
@@ -859,34 +895,35 @@ class BenchmarkRunner:
         total_benchmarks = len(models) * len(execution_providers)
         passed = 0
         failed = 0
+        skipped = 0
         current_test = 0
         
         all_results = []
         
-        for model in models:
+        for model_name in models:
             for execution_provider in execution_providers:
                 current_test += 1
                 
                 # Create test description
                 provider_info = f" ({execution_provider})" if execution_provider else ""
-                test_desc = f"{args.framework}/{model} {args.precision} BS={args.batch_size}{provider_info}"
+                test_desc = f"{framework}/{model_name} {precision} BS={batch_size}{provider_info}"
                 
                 # Show single line test status
                 print(f"[{current_test:3d}/{total_benchmarks}] {test_desc:<60} ", end="", flush=True)
                 
                 result = self.run_single_benchmark(
-                    args.framework, model, args.mode, args.use_case,
-                    args.precision, args.batch_size, execution_provider
+                    framework, model_name, args.mode, args.usecase,
+                    precision, batch_size, execution_provider
                 )
                 
                 # Add metadata to result
                 result.update({
-                    "framework": args.framework,
-                    "model": model,
+                    "framework": framework,
+                    "model": model_name,
                     "mode": args.mode,
-                    "use_case": args.use_case,
-                    "precision": args.precision,
-                    "batch_size": args.batch_size,
+                    "usecase": args.usecase,
+                    "precision": precision,
+                    "batch_size": batch_size,
                     "execution_provider": execution_provider,
                     "timestamp": datetime.now().isoformat()
                 })
@@ -897,7 +934,7 @@ class BenchmarkRunner:
                     passed += 1
                     # Show performance metric on the same line
                     metrics = result["metrics"]
-                    if args.use_case == "compute":
+                    if args.usecase == "compute":
                         if metrics.get("best_gflops"):
                             print(f"✓ {metrics['best_gflops']:.1f} GFLOPS")
                         elif metrics.get("best_bandwidth_gbs"):
@@ -908,6 +945,14 @@ class BenchmarkRunner:
                     else:
                         throughput = metrics.get("throughput_fps", 0)
                         print(f"✓ {throughput:.2f} samples/sec")
+                elif result["status"] == "SKIP":
+                    skipped += 1
+                    skip_reason = result["metrics"].get("skip_reason", "unknown")
+                    required_memory = result["metrics"].get("required_memory_gb", 0)
+                    if skip_reason == "insufficient_vram":
+                        print(f"⚠ SKIPPED - Insufficient VRAM ({required_memory:.1f}GB required)")
+                    else:
+                        print(f"⚠ SKIPPED - {result.get('error', 'Unknown reason')}")
                 else:
                     failed += 1
                     print(f"✗ FAILED - {result.get('error', 'Unknown error')}")
@@ -921,11 +966,17 @@ class BenchmarkRunner:
         self.logger.info(f"{'='*60}")
         self.logger.info(f"Total benchmarks: {total_benchmarks}")
         self.logger.success(f"Passed: {passed}")
+        self.logger.warning(f"Skipped: {skipped}")
         self.logger.error(f"Failed: {failed}")
-        self.logger.info(f"Success rate: {(passed/total_benchmarks)*100:.1f}%")
+        
+        # Calculate success rate based on attempted tests (excluding skipped)
+        attempted = passed + failed
+        if attempted > 0:
+            success_rate = (passed / attempted) * 100
+            self.logger.info(f"Success rate: {success_rate:.1f}% (of attempted tests)")
         
         # Print individual results
-        if args.framework == "onnx" and len(execution_providers) > 1:
+        if framework == "onnx" and len(execution_providers) > 1:
             self.logger.info("\nIndividual Results:")
             self.logger.info("=" * 80)
             for result in all_results:
@@ -935,21 +986,21 @@ class BenchmarkRunner:
                         provider = provider.replace("ExecutionProvider", "")
                     metrics = result["metrics"]
                     # Show appropriate performance metric based on use case
-                    if args.use_case == "compute":
+                    if args.usecase == "compute":
                         # For compute use cases, show GFLOPS or GB/s
                         if metrics.get("best_gflops"):
-                            self.logger.success(f"✓ {result['model']} - {args.framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_gflops']:.1f} GFLOPS")
+                            self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_gflops']:.1f} GFLOPS")
                         elif metrics.get("best_bandwidth_gbs"):
-                            self.logger.success(f"✓ {result['model']} - {args.framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_bandwidth_gbs']:.1f} GB/s")
+                            self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_bandwidth_gbs']:.1f} GB/s")
                         else:
                             throughput = metrics.get("throughput_fps", 0)
                             latency = metrics.get("avg_latency_ms", 0)
-                            self.logger.success(f"✓ {result['model']} - {args.framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
+                            self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
                     else:
                         # For other use cases, show samples/sec and latency
                         throughput = metrics.get("throughput_fps", 0)
                         latency = metrics.get("avg_latency_ms", 0)
-                        self.logger.success(f"✓ {result['model']} - {args.framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
+                        self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
         
         # Print detailed results table
         self.results.print_summary_table(all_results)
@@ -976,72 +1027,23 @@ class BenchmarkRunner:
         print(f"  Available: {available_memory:.1f} GB")
         print()
         
-        # Determine what benchmarks would be run
-        frameworks = args.framework if args.framework else get_default_frameworks()
-        models = []
-        
-        if args.model:
-            models = args.model
-        elif args.use_case:
-            for framework in frameworks:
-                models.extend(get_models_for_use_case(args.use_case, framework))
-        else:
-            for framework in frameworks:
-                models.extend(get_unique_models(framework))
-        
-        # Remove duplicates while preserving order
-        seen = set()
-        unique_models = []
-        for model in models:
-            if model not in seen:
-                seen.add(model)
-                unique_models.append(model)
-        
-        precisions = args.precision if args.precision else DEFAULT_PRECISIONS
-        batch_sizes = args.batch_size if args.batch_size else DEFAULT_BATCH_SIZES
-        
-        print("Memory Requirements Analysis:")
+        # Show VRAM requirements for Stable Diffusion models only
+        print("VRAM Requirements (Large Models Only):")
         print("-" * 60)
         
-        total_configs = 0
-        safe_configs = 0
-        risky_configs = 0
+        from utils.config import VRAM_REQUIREMENTS
         
-        for model in unique_models:
+        for model, requirements in VRAM_REQUIREMENTS.items():
             print(f"\n{model.upper()}:")
-            for precision in precisions:
-                for batch_size in batch_sizes:
-                    total_configs += 1
-                    will_fit, required_memory, recommendation = check_memory_availability(
-                        model, precision, batch_size, available_memory, safety_margin=2.0
-                    )
-                    
-                    status_icon = "✅" if will_fit else "❌"
-                    risk_level = "SAFE" if will_fit else "RISKY"
-                    
-                    if will_fit:
-                        safe_configs += 1
-                    else:
-                        risky_configs += 1
-                    
-                    print(f"  {status_icon} {precision} BS={batch_size}: {required_memory:.1f}GB ({risk_level})")
-                    
-                    if not will_fit:
-                        print(f"      {recommendation}")
+            for precision, vram_req in requirements.items():
+                if isinstance(vram_req, str):
+                    status = "❌ EXCEEDS GPU" if vram_req == ">24GB" else "✅ FITS"
+                else:
+                    status = "✅ FITS" if vram_req <= available_memory * 0.9 else "❌ INSUFFICIENT"
+                print(f"  {precision}: {vram_req} ({status})")
         
         print(f"\n" + "=" * 60)
-        print("SUMMARY:")
-        print(f"Total configurations: {total_configs}")
-        print(f"Safe configurations: {safe_configs} ({safe_configs/total_configs*100:.1f}%)")
-        print(f"Risky configurations: {risky_configs} ({risky_configs/total_configs*100:.1f}%)")
-        
-        if risky_configs > 0:
-            print(f"\n💡 RECOMMENDATIONS:")
-            print(f"   • Use --precision fp16 for better memory efficiency")
-            print(f"   • Use smaller batch sizes (--batch_size 1 2 4)")
-            print(f"   • For SD3, consider --cpu-offload flag")
-            print(f"   • Close other GPU applications to free memory")
-        
+        print("NOTE: ResNet and GPU compute models are small and not checked")
         print("=" * 60)
 
 def main():
@@ -1054,9 +1056,9 @@ def main():
     parser.add_argument("--mode", type=str,
                        choices=["inference", "training"],
                        help="Benchmark mode (default: inference)")
-    parser.add_argument("--use_case", type=str,
+    parser.add_argument("--usecase", type=str,
                        choices=["classification", "detection", "segmentation", "generation", "compute"],
-                       help="Use case for the benchmark (default: classification)")
+                       help="Use case for the benchmark (default: comprehensive - all use cases)")
     parser.add_argument("--precision", type=str, nargs='*',
                        choices=["fp32", "fp16", "mixed", "int8"],
                        help="Precision for inference (default: all available)")
@@ -1077,12 +1079,12 @@ def main():
     # Set defaults if not specified (but don't set framework default to allow multi-framework testing)
     if args.mode is None:
         args.mode = "inference"
-    if args.use_case is None:
-        # Intelligently determine use case based on model if specified
+    if args.usecase is None:
+        # Only set a default use case if a specific model is provided
+        # If no model is specified, leave usecase as None to run comprehensive benchmarks
         if args.model:
-            args.use_case = get_default_use_case_for_model(args.model[0] if isinstance(args.model, list) else args.model)
-        else:
-            args.use_case = "classification"
+            args.usecase = get_default_use_case_for_model(args.model[0] if isinstance(args.model, list) else args.model)
+        # Don't set a default usecase when no model is specified - this allows comprehensive benchmarks
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
