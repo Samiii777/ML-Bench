@@ -97,6 +97,10 @@ def get_default_frameworks():
     """Get list of default frameworks to test when none specified"""
     return DEFAULT_FRAMEWORKS.copy()
 
+def get_default_use_cases():
+    """Get list of default use cases to test when none specified"""
+    return DEFAULT_USE_CASES.copy()
+
 def get_default_use_case_for_model(model_name):
     """Get the default use case for a given model"""
     model_family = get_model_family(model_name)

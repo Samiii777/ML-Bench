@@ -18,7 +18,7 @@ import torch
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram
+from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
 
@@ -478,16 +478,40 @@ class BenchmarkRunner:
             
             # Calculate total combinations, accounting for skipped tests
             for model in models:
-                for precision in precisions:
-                    for batch_size in batch_sizes:
-                        for execution_provider in execution_providers:
-                            # Skip FP16 on CPU
-                            if precision == "fp16" and not torch.cuda.is_available():
-                                continue
-                            # Skip FP16 for CPU execution provider in ONNX
-                            if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
-                                continue
-                            total += 1
+                # Determine which use cases to test for this model
+                if args.usecase:
+                    # If user specified a specific use case, only test that one
+                    use_cases_to_test = [args.usecase]
+                else:
+                    # Test all applicable use cases for this model
+                    model_family = get_model_family(model)
+                    if model_family == "resnet":
+                        # For ResNet, test all use cases that ResNet supports
+                        use_cases_to_test = ["classification", "detection", "segmentation"]
+                    elif model_family == "stable_diffusion":
+                        use_cases_to_test = ["generation"]
+                    elif model_family == "gpu_ops":
+                        use_cases_to_test = ["compute"]
+                    else:
+                        # For unknown models, use the default use case
+                        use_cases_to_test = [get_default_use_case_for_model(model)]
+                
+                for use_case in use_cases_to_test:
+                    # Check if this use case is available for this framework
+                    available_frameworks = get_available_frameworks_for_use_case(use_case)
+                    if framework not in available_frameworks:
+                        continue  # Skip this use case for this framework
+                    
+                    for precision in precisions:
+                        for batch_size in batch_sizes:
+                            for execution_provider in execution_providers:
+                                # Skip FP16 on CPU
+                                if precision == "fp16" and not torch.cuda.is_available():
+                                    continue
+                                # Skip FP16 for CPU execution provider in ONNX
+                                if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
+                                    continue
+                                total += 1
         
         return total
 
@@ -549,78 +573,95 @@ class BenchmarkRunner:
         current_test = start_test_num
         
         for model in models:
-            for precision in precisions:
-                for batch_size in batch_sizes:
-                    for execution_provider in execution_providers:
-                        # Skip FP16 on CPU
-                        if precision == "fp16" and not torch.cuda.is_available():
-                            continue
-                        
-                        # Skip FP16 for CPU execution provider in ONNX
-                        if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
-                            continue
-                        
-                        current_test += 1
-                        
-                        # Determine the appropriate usecase for this specific model
-                        # If user specified a usecase, use that; otherwise use model's default
-                        if args.usecase:
-                            model_usecase = args.usecase
-                        else:
-                            model_usecase = get_default_use_case_for_model(model)
-                        
-                        # Create test description
-                        provider_info = f" ({execution_provider})" if execution_provider else ""
-                        test_desc = f"{framework}/{model} {precision} BS={batch_size}{provider_info}"
-                        
-                        # Show single line test status
-                        print(f"[{current_test:3d}/{total_tests}] {test_desc:<60} ", end="", flush=True)
-                        
-                        result = self.run_single_benchmark(
-                            framework, model, args.mode, model_usecase,
-                            precision, batch_size, execution_provider
-                        )
-                        
-                        # Add metadata to result
-                        result.update({
-                            "framework": framework,
-                            "model": model,
-                            "mode": args.mode,
-                            "usecase": model_usecase,
-                            "precision": precision,
-                            "batch_size": batch_size,
-                            "execution_provider": execution_provider,
-                            "timestamp": datetime.now().isoformat()
-                        })
-                        
-                        framework_results.append(result)
-                        
-                        if result["status"] == "PASS":
-                            passed += 1
-                            # Show performance metric on the same line
-                            metrics = result["metrics"]
-                            if model_usecase == "compute":
-                                if metrics.get("best_gflops"):
-                                    print(f"✓ {metrics['best_gflops']:.1f} GFLOPS")
-                                elif metrics.get("best_bandwidth_gbs"):
-                                    print(f"✓ {metrics['best_bandwidth_gbs']:.1f} GB/s")
+            # Determine which use cases to test for this model
+            if args.usecase:
+                # If user specified a specific use case, only test that one
+                use_cases_to_test = [args.usecase]
+            else:
+                # Test all applicable use cases for this model
+                model_family = get_model_family(model)
+                if model_family == "resnet":
+                    # For ResNet, test all use cases that ResNet supports
+                    use_cases_to_test = ["classification", "detection", "segmentation"]
+                elif model_family == "stable_diffusion":
+                    use_cases_to_test = ["generation"]
+                elif model_family == "gpu_ops":
+                    use_cases_to_test = ["compute"]
+                else:
+                    # For unknown models, use the default use case
+                    use_cases_to_test = [get_default_use_case_for_model(model)]
+            
+            for use_case in use_cases_to_test:
+                # Check if this use case is available for this framework
+                available_frameworks = get_available_frameworks_for_use_case(use_case)
+                if framework not in available_frameworks:
+                    continue  # Skip this use case for this framework
+                
+                for precision in precisions:
+                    for batch_size in batch_sizes:
+                        for execution_provider in execution_providers:
+                            # Skip FP16 on CPU
+                            if precision == "fp16" and not torch.cuda.is_available():
+                                continue
+                            
+                            # Skip FP16 for CPU execution provider in ONNX
+                            if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
+                                continue
+                            
+                            current_test += 1
+                            
+                            # Create test description
+                            provider_info = f" ({execution_provider})" if execution_provider else ""
+                            test_desc = f"{framework}/{model}[{use_case}] {precision} BS={batch_size}{provider_info}"
+                            
+                            # Show single line test status
+                            print(f"[{current_test:3d}/{total_tests}] {test_desc:<60} ", end="", flush=True)
+                            
+                            result = self.run_single_benchmark(
+                                framework, model, args.mode, use_case,
+                                precision, batch_size, execution_provider
+                            )
+                            
+                            # Add metadata to result
+                            result.update({
+                                "framework": framework,
+                                "model": model,
+                                "mode": args.mode,
+                                "usecase": use_case,
+                                "precision": precision,
+                                "batch_size": batch_size,
+                                "execution_provider": execution_provider,
+                                "timestamp": datetime.now().isoformat()
+                            })
+                            
+                            framework_results.append(result)
+                            
+                            if result["status"] == "PASS":
+                                passed += 1
+                                # Show performance metric on the same line
+                                metrics = result["metrics"]
+                                if use_case == "compute":
+                                    if metrics.get("best_gflops"):
+                                        print(f"✓ {metrics['best_gflops']:.1f} GFLOPS")
+                                    elif metrics.get("best_bandwidth_gbs"):
+                                        print(f"✓ {metrics['best_bandwidth_gbs']:.1f} GB/s")
+                                    else:
+                                        throughput = metrics.get("throughput_fps", 0)
+                                        print(f"✓ {throughput:.2f} samples/sec")
                                 else:
                                     throughput = metrics.get("throughput_fps", 0)
                                     print(f"✓ {throughput:.2f} samples/sec")
+                            elif result["status"] == "SKIP":
+                                skipped += 1
+                                skip_reason = result["metrics"].get("skip_reason", "unknown")
+                                required_memory = result["metrics"].get("required_memory_gb", 0)
+                                if skip_reason == "insufficient_vram":
+                                    print(f"⚠ SKIPPED - Insufficient VRAM ({required_memory:.1f}GB required)")
+                                else:
+                                    print(f"⚠ SKIPPED - {result.get('error', 'Unknown reason')}")
                             else:
-                                throughput = metrics.get("throughput_fps", 0)
-                                print(f"✓ {throughput:.2f} samples/sec")
-                        elif result["status"] == "SKIP":
-                            skipped += 1
-                            skip_reason = result["metrics"].get("skip_reason", "unknown")
-                            required_memory = result["metrics"].get("required_memory_gb", 0)
-                            if skip_reason == "insufficient_vram":
-                                print(f"⚠ SKIPPED - Insufficient VRAM ({required_memory:.1f}GB required)")
-                            else:
-                                print(f"⚠ SKIPPED - {result.get('error', 'Unknown reason')}")
-                        else:
-                            failed += 1
-                            print(f"✗ FAILED - {result.get('error', 'Unknown error')}")
+                                failed += 1
+                                print(f"✗ FAILED - {result.get('error', 'Unknown error')}")
         
         # Print framework summary with memory management stats
         self.logger.info(f"\n{'='*80}")
@@ -862,11 +903,12 @@ class BenchmarkRunner:
     
     def run_benchmarks(self, args) -> None:
         """Run benchmarks based on arguments (backward compatibility)"""
-        # If specific parameters are provided AND framework is specified, use the original behavior
-        if args.framework and all([args.model, args.precision is not None, args.batch_size is not None]):
+        # If specific parameters are provided AND a specific use case is specified, use the original behavior
+        # Otherwise, run comprehensive benchmarks to test all use cases for the model
+        if args.framework and all([args.model, args.precision is not None, args.batch_size is not None, args.usecase is not None]):
             self._run_specific_benchmarks(args)
         else:
-            # Otherwise, run comprehensive benchmarks (possibly multi-framework)
+            # Run comprehensive benchmarks (possibly multi-framework, multi-use-case)
             self.run_comprehensive_benchmarks(args)
     
     def _run_specific_benchmarks(self, args) -> None:
@@ -1089,12 +1131,8 @@ def main():
     # Set defaults if not specified (but don't set framework default to allow multi-framework testing)
     if args.mode is None:
         args.mode = "inference"
-    if args.usecase is None:
-        # Only set a default use case if a specific model is provided
-        # If no model is specified, leave usecase as None to run comprehensive benchmarks
-        if args.model:
-            args.usecase = get_default_use_case_for_model(args.model[0] if isinstance(args.model, list) else args.model)
-        # Don't set a default usecase when no model is specified - this allows comprehensive benchmarks
+    # Don't automatically set usecase - let it be None to enable comprehensive benchmarks with all use cases
+    # Only use default use case for backward compatibility when all specific parameters are provided
     
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)

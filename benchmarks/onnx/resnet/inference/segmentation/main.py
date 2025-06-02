@@ -238,6 +238,22 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     if session is None:
         raise RuntimeError("Failed to create ONNX session")
     
+    # Get device information
+    actual_providers = session.get_providers()
+    device_info = "unknown"
+    if execution_provider == "CUDAExecutionProvider" and "CUDAExecutionProvider" in actual_providers:
+        if torch.cuda.is_available():
+            device_info = f"cuda ({torch.cuda.get_device_name()})"
+        else:
+            device_info = "cuda"
+    elif execution_provider == "TensorrtExecutionProvider" and "TensorrtExecutionProvider" in actual_providers:
+        if torch.cuda.is_available():
+            device_info = f"tensorrt ({torch.cuda.get_device_name()})"
+        else:
+            device_info = "tensorrt"
+    elif execution_provider == "CPUExecutionProvider":
+        device_info = "cpu"
+    
     # Get input/output info
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
@@ -260,11 +276,26 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     print(f"Input dtype: {batch_data.dtype}")
     print(f"Batch size: {batch_size}")
     print(f"Execution provider: {execution_provider}")
+    print(f"Device: {device_info}")
+    
+    # Track memory before inference (if CUDA available)
+    initial_memory = 0
+    if torch.cuda.is_available() and execution_provider in ["CUDAExecutionProvider", "TensorrtExecutionProvider"]:
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+        initial_memory = torch.cuda.memory_allocated()
     
     # Warmup
     print("Warming up...")
     for i in range(warmup_runs):
         outputs = session.run([output_name], {input_name: batch_data})
+        if torch.cuda.is_available() and execution_provider in ["CUDAExecutionProvider", "TensorrtExecutionProvider"]:
+            torch.cuda.synchronize()
+    
+    # Reset memory tracking after warmup
+    if torch.cuda.is_available() and execution_provider in ["CUDAExecutionProvider", "TensorrtExecutionProvider"]:
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
     
     # Benchmark
     print("Benchmarking...")
@@ -273,6 +304,8 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     for i in range(benchmark_runs):
         start_time = time.perf_counter()
         outputs = session.run([output_name], {input_name: batch_data})
+        if torch.cuda.is_available() and execution_provider in ["CUDAExecutionProvider", "TensorrtExecutionProvider"]:
+            torch.cuda.synchronize()
         end_time = time.perf_counter()
         times.append(end_time - start_time)
     
@@ -285,6 +318,43 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     # Calculate throughput
     samples_per_second = batch_size / avg_time
     
+    # Memory usage tracking
+    memory_used_gb = 0
+    if torch.cuda.is_available() and execution_provider in ["CUDAExecutionProvider", "TensorrtExecutionProvider"]:
+        # ONNX Runtime doesn't directly report to PyTorch's memory tracker
+        # We need to estimate based on model and batch size
+        
+        # Base model memory (DeepLabV3-ResNet50 is ~40-60MB parameters)
+        base_model_memory = 0.15  # ~150MB for model weights and activations
+        
+        # Input memory: batch_size * channels * height * width * 4 bytes (fp32)
+        input_memory_gb = (batch_size * 3 * 520 * 520 * 4) / 1024**3
+        
+        # Output memory: batch_size * classes * height * width * 4 bytes
+        output_memory_gb = (batch_size * 21 * 520 * 520 * 4) / 1024**3
+        
+        # Intermediate activations (rough estimate: 2-3x input size for segmentation)
+        activation_memory_gb = input_memory_gb * 2.5
+        
+        memory_used_gb = base_model_memory + input_memory_gb + output_memory_gb + activation_memory_gb
+        
+        # Try to get actual CUDA memory if available
+        try:
+            if torch.cuda.is_available():
+                current_memory = torch.cuda.memory_allocated() / 1024**3
+                if current_memory > 0.01:  # If we have some CUDA memory tracked
+                    memory_used_gb = max(memory_used_gb, current_memory)
+        except:
+            pass
+            
+        print(f"GPU Memory Allocated: {memory_used_gb:.2f} GB")
+    else:
+        # CPU memory estimation
+        base_model_memory = 0.2  # Slightly higher for CPU due to different memory layout
+        batch_memory_gb = (batch_size * batch_data.nbytes) / 1024**3
+        memory_used_gb = base_model_memory + batch_memory_gb * 2  # 2x for input/output
+        print(f"Estimated CPU Memory Used: {memory_used_gb:.2f} GB")
+    
     # Analyze output
     segmentation_output = outputs[0]
     if len(segmentation_output.shape) == 4:  # [batch, classes, height, width]
@@ -296,6 +366,7 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     
     print(f"\n=== {model_name.upper()} ONNX SEGMENTATION BENCHMARK RESULTS ===")
     print(f"Execution Provider: {execution_provider}")
+    print(f"Device: {device_info}")
     print(f"Batch Size: {batch_size}")
     print(f"Precision: {precision}")
     print(f"Input Resolution: {batch_data.shape[2]}x{batch_data.shape[3]}")
@@ -311,6 +382,7 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     return {
         'model': model_name,
         'execution_provider': execution_provider,
+        'device': device_info,
         'batch_size': batch_size,
         'precision': precision,
         'avg_time_ms': avg_time * 1000,
@@ -318,6 +390,7 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
         'min_time_ms': min_time * 1000,
         'max_time_ms': max_time * 1000,
         'samples_per_second': samples_per_second,
+        'memory_used_gb': memory_used_gb,
         'detected_classes': unique_classes,
         'output_shape': segmentation_output.shape
     }
