@@ -121,13 +121,23 @@ class BenchmarkRunner:
             # Use longer timeout for TensorRT due to compilation overhead
             timeout_seconds = 900 if execution_provider == "TensorrtExecutionProvider" else 300  # 15 min vs 5 min
             
+            # Set environment variables to include the root directory in Python path
+            env = os.environ.copy()
+            root_dir = os.path.abspath(os.path.dirname(__file__))  # The directory containing benchmark.py
+            current_pythonpath = env.get('PYTHONPATH', '')
+            if current_pythonpath:
+                env['PYTHONPATH'] = f"{root_dir}{os.pathsep}{current_pythonpath}"
+            else:
+                env['PYTHONPATH'] = root_dir
+            
             # Run the benchmark script
             result = subprocess.run(
                 cmd, 
                 capture_output=True, 
                 text=True, 
                 timeout=timeout_seconds,
-                cwd=os.path.dirname(script_path)
+                cwd=os.path.dirname(script_path),
+                env=env
             )
             
             execution_time = time.time() - start_time
@@ -337,8 +347,8 @@ class BenchmarkRunner:
             else:
                 frameworks = [args.framework]
         else:
-            # Default to pytorch when no framework is specified
-            frameworks = ["pytorch"]
+            # Use configured default frameworks (both pytorch and onnx)
+            frameworks = get_default_frameworks()
         
         print(f"Frameworks: {frameworks}")
         
@@ -421,8 +431,8 @@ class BenchmarkRunner:
             else:
                 frameworks = [args.framework]
         else:
-            # Default to pytorch when no framework is specified
-            frameworks = ["pytorch"]
+            # Use configured default frameworks (both pytorch and onnx)
+            frameworks = get_default_frameworks()
         
         total = 0
         for framework in frameworks:
