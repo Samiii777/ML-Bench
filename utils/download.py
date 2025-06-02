@@ -49,6 +49,39 @@ def download_sample_image(force_download=False):
     url = "https://github.com/pytorch/hub/raw/master/images/dog.jpg"
     return download_file(url, "dog.jpg", force_download)
 
+def download_coco_classes(force_download=False):
+    """Download COCO class labels for object detection"""
+    # We'll create a simple COCO classes file since the classes are hardcoded in our detection script
+    data_dir = get_data_dir()
+    data_dir.mkdir(exist_ok=True)
+    
+    filepath = data_dir / "coco_classes.txt"
+    
+    if not filepath.exists() or force_download:
+        print(f"Creating COCO classes file at {filepath}...")
+        
+        coco_classes = [
+            'person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light',
+            'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow',
+            'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee',
+            'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard',
+            'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple',
+            'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch',
+            'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard',
+            'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase',
+            'scissors', 'teddy bear', 'hair drier', 'toothbrush'
+        ]
+        
+        with open(filepath, 'w') as f:
+            for class_name in coco_classes:
+                f.write(class_name + '\n')
+        
+        print(f"✓ COCO classes file created successfully.")
+    else:
+        print(f"✓ COCO classes file already exists at {filepath}")
+    
+    return str(filepath)
+
 def download_all_common_files(force_download=False):
     """Download all commonly used files"""
     print("Downloading common benchmark files...")
@@ -56,6 +89,7 @@ def download_all_common_files(force_download=False):
     files = {}
     files['imagenet_classes'] = download_imagenet_classes(force_download)
     files['sample_image'] = download_sample_image(force_download)
+    files['coco_classes'] = download_coco_classes(force_download)
     
     print(f"All files downloaded to: {get_data_dir()}")
     return files
@@ -67,6 +101,10 @@ def get_imagenet_classes_path():
 def get_sample_image_path():
     """Get the path to sample image file, download if needed"""
     return download_sample_image()
+
+def get_coco_classes_path():
+    """Get the path to COCO classes file, download if needed"""
+    return download_coco_classes()
 
 def list_data_files():
     """List all files in the data directory"""

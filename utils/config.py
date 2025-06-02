@@ -48,7 +48,7 @@ DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256]
 DEFAULT_FRAMEWORK = "pytorch"
 DEFAULT_MODE = "inference"
 DEFAULT_USE_CASE = "classification"
-DEFAULT_USE_CASES = ["classification", "generation", "compute"]
+DEFAULT_USE_CASES = ["classification", "detection", "generation", "compute"]
 
 # Simple VRAM requirement estimates (GB) - only for large models that need checking
 VRAM_REQUIREMENTS = {
@@ -129,8 +129,14 @@ def get_models_for_use_case(use_case, framework="pytorch"):
     compatible_models = []
     
     for model in all_models:
-        model_use_case = get_default_use_case_for_model(model)
-        if model_use_case == use_case:
+        model_family = get_model_family(model)
+        if use_case == "classification" and model_family == "resnet":
+            compatible_models.append(model)
+        elif use_case == "detection" and model_family == "resnet":
+            compatible_models.append(model)
+        elif use_case == "generation" and model_family == "stable_diffusion":
+            compatible_models.append(model)
+        elif use_case == "compute" and model_family == "gpu_ops":
             compatible_models.append(model)
     
     return compatible_models
@@ -141,6 +147,8 @@ def get_available_frameworks_for_use_case(use_case):
         return ["pytorch"]  # Only PyTorch supports Stable Diffusion
     elif use_case == "classification":
         return ["pytorch", "onnx"]  # Both frameworks support ResNet
+    elif use_case == "detection":
+        return ["pytorch", "onnx"]  # Both frameworks support ResNet for detection
     elif use_case == "compute":
         return ["pytorch"]  # Only PyTorch for GPU ops
     else:
