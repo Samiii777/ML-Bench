@@ -44,7 +44,15 @@ ONNX_EXECUTION_PROVIDERS = [
 # Default settings
 DEFAULT_FRAMEWORKS = ["pytorch", "onnx"]
 DEFAULT_PRECISIONS = ["fp32", "fp16", "mixed"]
+DEFAULT_TRAINING_PRECISIONS = ["fp32", "mixed"]  # No pure fp16 for training
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+DEFAULT_TRAINING_BATCH_SIZES = {
+    "classification": [64],      # Large batch size works for classification
+    "detection": [8],           # Smaller batch size needed for detection  
+    "segmentation": [16],       # Medium batch size for segmentation
+    "generation": [4],          # Very small for Stable Diffusion
+    "compute": [64]             # Large for GPU compute operations
+}
 DEFAULT_FRAMEWORK = "pytorch"
 DEFAULT_MODE = "inference"
 DEFAULT_USE_CASE = "classification"
@@ -184,6 +192,31 @@ def get_vram_requirement(model: str, precision: str = 'fp32', batch_size: int = 
     else:
         # Small model not in requirements table - return minimal requirement
         return "1.0GB"
+
+def get_available_use_cases_for_training(framework="pytorch"):
+    """Get list of use cases that have training implementations for a framework"""
+    if framework == "pytorch":
+        # Only PyTorch has training implementations
+        return ["classification", "detection", "segmentation"]
+    elif framework == "onnx":
+        # ONNX doesn't have training scripts (inference only)
+        return []
+    else:
+        return []
+
+def get_training_batch_sizes_for_use_case(use_case):
+    """Get training batch sizes for a specific use case"""
+    return DEFAULT_TRAINING_BATCH_SIZES.get(use_case, [32])  # Default fallback
+
+def should_skip_use_case_for_mode(use_case, mode, framework):
+    """Check if a use case should be skipped for a specific mode and framework"""
+    if mode == "training":
+        available_training_use_cases = get_available_use_cases_for_training(framework)
+        return use_case not in available_training_use_cases
+    else:
+        # For inference, use the existing logic
+        available_frameworks = get_available_frameworks_for_use_case(use_case)
+        return framework not in available_frameworks
 
 def should_skip_for_vram(model: str, precision: str, batch_size: int, available_vram_gb: float) -> tuple[bool, str]:
     """

@@ -18,7 +18,7 @@ import torch
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases
+from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
 
@@ -69,7 +69,7 @@ class BenchmarkRunner:
         return str(script_path)
     
     def run_single_benchmark(self, framework: str, model: str, mode: str, use_case: str, 
-                           precision: str, batch_size: int, execution_provider: str = None) -> Dict[str, Any]:
+                           precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch") -> Dict[str, Any]:
         """Run a single benchmark and return results"""
         script_path = self.get_benchmark_script_path(framework, model, mode, use_case)
         
@@ -109,9 +109,13 @@ class BenchmarkRunner:
             sys.executable, "main.py",
             "--model", model,
             "--precision", precision,
-            "--batch_size", str(batch_size)
+            "--batch_size", str(batch_size),
         ]
-        
+
+        # Only add training_mode for training mode, not inference
+        if mode == "training":
+            cmd.extend(["--training_mode", training_mode])
+
         # Add execution provider for ONNX
         if framework == "onnx" and execution_provider:
             cmd.extend(["--execution_provider", execution_provider])
@@ -220,6 +224,24 @@ class BenchmarkRunner:
                     # Extract number from line like "Throughput: 123.45 samples/sec"
                     throughput_str = line.split(':')[1].strip().replace('samples/sec', '').strip()
                     metrics['throughput_fps'] = float(throughput_str)
+                except:
+                    pass
+            
+            # Look for training throughput
+            if "Training Throughput:" in line and "samples/sec" in line:
+                try:
+                    # Extract number from line like "Training Throughput: 123.45 samples/sec"
+                    throughput_str = line.split(':')[1].strip().replace('samples/sec', '').strip()
+                    metrics['throughput_fps'] = float(throughput_str)
+                except:
+                    pass
+            
+            # Look for validation throughput  
+            if "Validation Throughput:" in line and "samples/sec" in line:
+                try:
+                    # Extract number from line like "Validation Throughput: 123.45 samples/sec"
+                    throughput_str = line.split(':')[1].strip().replace('samples/sec', '').strip()
+                    metrics['val_throughput_fps'] = float(throughput_str)
                 except:
                     pass
             
@@ -455,7 +477,10 @@ class BenchmarkRunner:
             
             # Determine which precisions to test
             if args.precision is None:
-                precisions = DEFAULT_PRECISIONS
+                if args.mode == "training":
+                    precisions = DEFAULT_TRAINING_PRECISIONS
+                else:
+                    precisions = DEFAULT_PRECISIONS
             elif isinstance(args.precision, list):
                 precisions = args.precision
             else:
@@ -463,7 +488,10 @@ class BenchmarkRunner:
             
             # Determine which batch sizes to test
             if args.batch_size is None:
-                batch_sizes = DEFAULT_BATCH_SIZES
+                if args.mode == "training":
+                    batch_sizes = DEFAULT_TRAINING_BATCH_SIZES
+                else:
+                    batch_sizes = DEFAULT_BATCH_SIZES
             elif isinstance(args.batch_size, list):
                 batch_sizes = args.batch_size
             else:
@@ -497,13 +525,23 @@ class BenchmarkRunner:
                         use_cases_to_test = [get_default_use_case_for_model(model)]
                 
                 for use_case in use_cases_to_test:
-                    # Check if this use case is available for this framework
-                    available_frameworks = get_available_frameworks_for_use_case(use_case)
-                    if framework not in available_frameworks:
-                        continue  # Skip this use case for this framework
+                    # Check if this use case is available for this framework and mode
+                    if should_skip_use_case_for_mode(use_case, args.mode, framework):
+                        continue  # Skip this use case for this framework/mode combination
+                    
+                    # Determine batch sizes for this specific use case
+                    if args.batch_size is None:
+                        if args.mode == "training":
+                            batch_sizes_for_use_case = get_training_batch_sizes_for_use_case(use_case)
+                        else:
+                            batch_sizes_for_use_case = DEFAULT_BATCH_SIZES
+                    elif isinstance(args.batch_size, list):
+                        batch_sizes_for_use_case = args.batch_size
+                    else:
+                        batch_sizes_for_use_case = [args.batch_size]
                     
                     for precision in precisions:
-                        for batch_size in batch_sizes:
+                        for batch_size in batch_sizes_for_use_case:
                             for execution_provider in execution_providers:
                                 # Skip FP16 on CPU
                                 if precision == "fp16" and not torch.cuda.is_available():
@@ -544,7 +582,10 @@ class BenchmarkRunner:
         
         # Determine which precisions to test
         if args.precision is None:
-            precisions = DEFAULT_PRECISIONS  # ["fp32", "fp16"]
+            if args.mode == "training":
+                precisions = DEFAULT_TRAINING_PRECISIONS
+            else:
+                precisions = DEFAULT_PRECISIONS  # ["fp32", "fp16"]
         elif isinstance(args.precision, list):
             precisions = args.precision
         else:
@@ -552,7 +593,10 @@ class BenchmarkRunner:
         
         # Determine which batch sizes to test
         if args.batch_size is None:
-            batch_sizes = DEFAULT_BATCH_SIZES  # [1, 4, 8, 16]
+            if args.mode == "training":
+                batch_sizes = DEFAULT_TRAINING_BATCH_SIZES
+            else:
+                batch_sizes = DEFAULT_BATCH_SIZES
         elif isinstance(args.batch_size, list):
             batch_sizes = args.batch_size
         else:
@@ -592,13 +636,23 @@ class BenchmarkRunner:
                     use_cases_to_test = [get_default_use_case_for_model(model)]
             
             for use_case in use_cases_to_test:
-                # Check if this use case is available for this framework
-                available_frameworks = get_available_frameworks_for_use_case(use_case)
-                if framework not in available_frameworks:
-                    continue  # Skip this use case for this framework
+                # Check if this use case is available for this framework and mode
+                if should_skip_use_case_for_mode(use_case, args.mode, framework):
+                    continue  # Skip this use case for this framework/mode combination
+                
+                # Determine batch sizes for this specific use case
+                if args.batch_size is None:
+                    if args.mode == "training":
+                        batch_sizes_for_use_case = get_training_batch_sizes_for_use_case(use_case)
+                    else:
+                        batch_sizes_for_use_case = DEFAULT_BATCH_SIZES
+                elif isinstance(args.batch_size, list):
+                    batch_sizes_for_use_case = args.batch_size
+                else:
+                    batch_sizes_for_use_case = [args.batch_size]
                 
                 for precision in precisions:
-                    for batch_size in batch_sizes:
+                    for batch_size in batch_sizes_for_use_case:
                         for execution_provider in execution_providers:
                             # Skip FP16 on CPU
                             if precision == "fp16" and not torch.cuda.is_available():
@@ -619,7 +673,8 @@ class BenchmarkRunner:
                             
                             result = self.run_single_benchmark(
                                 framework, model, args.mode, use_case,
-                                precision, batch_size, execution_provider
+                                precision, batch_size, execution_provider,
+                                getattr(args, 'training_mode', 'scratch')
                             )
                             
                             # Add metadata to result
@@ -965,7 +1020,8 @@ class BenchmarkRunner:
                 
                 result = self.run_single_benchmark(
                     framework, model_name, args.mode, args.usecase,
-                    precision, batch_size, execution_provider
+                    precision, batch_size, execution_provider,
+                    getattr(args, 'training_mode', 'scratch')
                 )
                 
                 # Add metadata to result
@@ -1125,6 +1181,9 @@ def main():
                        help="ONNX execution provider (default: auto-detect best)")
     parser.add_argument("--check-memory", action="store_true",
                        help="Check memory requirements for planned benchmarks without running them")
+    parser.add_argument("--training_mode", type=str, default="scratch",
+                       choices=["scratch", "finetune"],
+                       help="Training mode: scratch (random weights) or finetune (pre-trained weights)")
     
     args = parser.parse_args()
     
