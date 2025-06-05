@@ -6,6 +6,7 @@ Handles downloading and caching of common files like ImageNet classes and sample
 import os
 import urllib.request
 from pathlib import Path
+from .safe_print import safe_print, format_success_message
 
 def get_data_dir():
     """Get the centralized data directory path"""
@@ -30,14 +31,30 @@ def download_file(url, filename, force_download=False):
         print(f"Downloading {filename} to {filepath}...")
         try:
             urllib.request.urlretrieve(url, filepath)
-            print(f"✓ {filename} downloaded successfully.")
+            safe_print(format_success_message(f"{filename} downloaded successfully."))
         except Exception as e:
             print(f"✗ Failed to download {filename}: {e}")
             raise
     else:
-        print(f"✓ {filename} already exists at {filepath}")
+        safe_print(format_success_message(f"{filename} already exists at {filepath}"))
     
     return str(filepath)
+
+def download_file_if_not_exists(url, filepath):
+    """Download a file if it doesn't already exist"""
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    
+    if not filepath.exists():
+        print(f"Downloading {filepath.name}...")
+        try:
+            urllib.request.urlretrieve(url, str(filepath))
+            safe_print(format_success_message(f"{filepath.name} downloaded successfully."))
+        except Exception as e:
+            print(f"Error downloading {filepath.name}: {e}")
+            raise
+    else:
+        safe_print(format_success_message(f"{filepath.name} already exists at {filepath}"))
 
 def download_imagenet_classes(force_download=False):
     """Download ImageNet class labels"""
@@ -76,9 +93,9 @@ def download_coco_classes(force_download=False):
             for class_name in coco_classes:
                 f.write(class_name + '\n')
         
-        print(f"✓ COCO classes file created successfully.")
+        safe_print(format_success_message("COCO classes file created successfully."))
     else:
-        print(f"✓ COCO classes file already exists at {filepath}")
+        safe_print(format_success_message(f"COCO classes file already exists at {filepath}"))
     
     return str(filepath)
 

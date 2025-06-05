@@ -21,6 +21,7 @@ from utils.logger import BenchmarkLogger
 from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
+from utils.safe_print import safe_print, format_success_message, get_safe_checkmark
 
 class BenchmarkRunner:
     def __init__(self):
@@ -695,17 +696,18 @@ class BenchmarkRunner:
                                 passed += 1
                                 # Show performance metric on the same line
                                 metrics = result["metrics"]
+                                checkmark = get_safe_checkmark()
                                 if use_case == "compute":
                                     if metrics.get("best_gflops"):
-                                        print(f"✓ {metrics['best_gflops']:.1f} GFLOPS")
+                                        safe_print(f"{checkmark} {metrics['best_gflops']:.1f} GFLOPS")
                                     elif metrics.get("best_bandwidth_gbs"):
-                                        print(f"✓ {metrics['best_bandwidth_gbs']:.1f} GB/s")
+                                        safe_print(f"{checkmark} {metrics['best_bandwidth_gbs']:.1f} GB/s")
                                     else:
                                         throughput = metrics.get("throughput_fps", 0)
-                                        print(f"✓ {throughput:.2f} samples/sec")
+                                        safe_print(f"{checkmark} {throughput:.2f} samples/sec")
                                 else:
                                     throughput = metrics.get("throughput_fps", 0)
-                                    print(f"✓ {throughput:.2f} samples/sec")
+                                    safe_print(f"{checkmark} {throughput:.2f} samples/sec")
                             elif result["status"] == "SKIP":
                                 skipped += 1
                                 skip_reason = result["metrics"].get("skip_reason", "unknown")
@@ -1040,19 +1042,23 @@ class BenchmarkRunner:
                 
                 if result["status"] == "PASS":
                     passed += 1
-                    # Show performance metric on the same line
-                    metrics = result["metrics"]
+                    # Show appropriate performance metric based on use case
+                    checkmark = get_safe_checkmark()
                     if args.usecase == "compute":
-                        if metrics.get("best_gflops"):
-                            print(f"✓ {metrics['best_gflops']:.1f} GFLOPS")
-                        elif metrics.get("best_bandwidth_gbs"):
-                            print(f"✓ {metrics['best_bandwidth_gbs']:.1f} GB/s")
+                        # For compute use cases, show GFLOPS or GB/s
+                        if result["metrics"].get("best_gflops"):
+                            safe_print(f"{checkmark} {result['model']} - {framework.upper()} ({execution_provider}) ({result['precision']}, BS={result['batch_size']}): {result['metrics']['best_gflops']:.1f} GFLOPS")
+                        elif result["metrics"].get("best_bandwidth_gbs"):
+                            safe_print(f"{checkmark} {result['model']} - {framework.upper()} ({execution_provider}) ({result['precision']}, BS={result['batch_size']}): {result['metrics']['best_bandwidth_gbs']:.1f} GB/s")
                         else:
-                            throughput = metrics.get("throughput_fps", 0)
-                            print(f"✓ {throughput:.2f} samples/sec")
+                            throughput = result["metrics"].get("throughput_fps", 0)
+                            latency = result["metrics"].get("avg_latency_ms", 0)
+                            safe_print(f"{checkmark} {result['model']} - {framework.upper()} ({execution_provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
                     else:
-                        throughput = metrics.get("throughput_fps", 0)
-                        print(f"✓ {throughput:.2f} samples/sec")
+                        # For other use cases, show samples/sec and latency
+                        throughput = result["metrics"].get("throughput_fps", 0)
+                        latency = result["metrics"].get("avg_latency_ms", 0)
+                        safe_print(f"{checkmark} {result['model']} - {framework.upper()} ({execution_provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
                 elif result["status"] == "SKIP":
                     skipped += 1
                     skip_reason = result["metrics"].get("skip_reason", "unknown")
@@ -1094,21 +1100,22 @@ class BenchmarkRunner:
                         provider = provider.replace("ExecutionProvider", "")
                     metrics = result["metrics"]
                     # Show appropriate performance metric based on use case
+                    checkmark = get_safe_checkmark()
                     if args.usecase == "compute":
                         # For compute use cases, show GFLOPS or GB/s
                         if metrics.get("best_gflops"):
-                            self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_gflops']:.1f} GFLOPS")
+                            self.logger.success(f"{checkmark} {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_gflops']:.1f} GFLOPS")
                         elif metrics.get("best_bandwidth_gbs"):
-                            self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_bandwidth_gbs']:.1f} GB/s")
+                            self.logger.success(f"{checkmark} {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {metrics['best_bandwidth_gbs']:.1f} GB/s")
                         else:
                             throughput = metrics.get("throughput_fps", 0)
                             latency = metrics.get("avg_latency_ms", 0)
-                            self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
+                            self.logger.success(f"{checkmark} {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
                     else:
                         # For other use cases, show samples/sec and latency
                         throughput = metrics.get("throughput_fps", 0)
                         latency = metrics.get("avg_latency_ms", 0)
-                        self.logger.success(f"✓ {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
+                        self.logger.success(f"{checkmark} {result['model']} - {framework.upper()} ({provider}) ({result['precision']}, BS={result['batch_size']}): {throughput:.2f} samples/sec, {latency:.2f} ms/sample")
         
         # Print detailed results table
         self.results.print_summary_table(all_results)

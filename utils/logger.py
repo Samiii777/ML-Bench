@@ -6,6 +6,7 @@ import logging
 import sys
 from datetime import datetime
 from typing import Any
+from .safe_print import safe_print, format_success_message, get_safe_checkmark
 
 class Colors:
     """ANSI color codes for terminal output"""
@@ -78,7 +79,8 @@ class BenchmarkLogger:
     def log_benchmark_result(self, model: str, status: str, metrics: dict = None) -> None:
         """Log benchmark result with appropriate color"""
         if status == "PASS":
-            self.success(f"✓ {model}: {status}")
+            checkmark = get_safe_checkmark()
+            self.success(f"{checkmark} {model}: {status}")
             if metrics:
                 for key, value in metrics.items():
                     self.info(f"  {key}: {value}")

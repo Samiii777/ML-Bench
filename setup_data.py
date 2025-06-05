@@ -1,22 +1,26 @@
 #!/usr/bin/env python3
 """
-Setup script to download common benchmark data files
-This script downloads ImageNet classes and sample images to the data directory
+Setup script to download and prepare common data files for benchmarking
 """
 
-import sys
 import os
+import sys
 from pathlib import Path
 
-# Clean import of utils - no ugly relative paths!
+# Add project root to path for imports
+project_root = Path(__file__).resolve().parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 import utils
-from utils.download import download_all_common_files, list_data_files, get_data_dir
+from utils.download import download_all_common_files, list_data_files
+from utils.safe_print import safe_print, format_success_message
 
 def main():
     print("ML Model Benchmarking Framework - Data Setup")
     print("=" * 50)
     
-    print(f"Data directory: {get_data_dir()}")
+    print(f"Data directory: {utils.get_data_dir()}")
     print()
     
     # Check if files already exist
@@ -35,12 +39,15 @@ def main():
     try:
         files = download_all_common_files(force_download=force_download)
         
-        print(f"\n✓ Setup completed successfully!")
-        print(f"Downloaded files:")
-        for name, path in files.items():
-            print(f"  {name}: {path}")
+        print(f"\n" + "=" * 50)
+        print("SETUP COMPLETE")
+        print("=" * 50)
         
-        print(f"\nAll benchmark scripts will now use files from: {get_data_dir()}")
+        safe_print(format_success_message("Setup completed successfully!"))
+        print()
+        list_data_files()
+        
+        print(f"\nAll benchmark scripts will now use files from: {utils.get_data_dir()}")
         
     except Exception as e:
         print(f"\n✗ Setup failed: {e}")

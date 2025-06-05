@@ -21,6 +21,7 @@ for parent in project_root.parents:
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.download import get_imagenet_classes_path, get_sample_image_path
+from utils.safe_print import safe_print, format_success_message
 
 # Simple device utilities - everything in one place
 def get_device():
@@ -95,9 +96,9 @@ def download_file(url, filename):
     if not os.path.exists(filename):
         print(f"Downloading {filename}...")
         urllib.request.urlretrieve(url, filename)
-        print(f"✓ {filename} downloaded")
+        safe_print(format_success_message(f"{filename} downloaded"))
     else:
-        print(f"✓ {filename} already exists")
+        safe_print(format_success_message(f"{filename} already exists"))
 
 def get_imagenet_classes_path():
     """Get path to ImageNet classes file"""

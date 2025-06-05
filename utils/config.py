@@ -45,7 +45,7 @@ ONNX_EXECUTION_PROVIDERS = [
 DEFAULT_FRAMEWORKS = ["pytorch", "onnx"]
 DEFAULT_PRECISIONS = ["fp32", "fp16", "mixed"]
 DEFAULT_TRAINING_PRECISIONS = ["fp32", "mixed"]  # No pure fp16 for training
-DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64]
 DEFAULT_TRAINING_BATCH_SIZES = {
     "classification": [64],      # Large batch size works for classification
     "detection": [8],           # Smaller batch size needed for detection  
