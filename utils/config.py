@@ -28,7 +28,7 @@ PYTORCH_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
     "stable_diffusion_1_5", "sd1.5", "sd15",
     "stable_diffusion_3_medium", "sd3_medium", "sd3",
-    "gpu_ops", "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"
+    "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"
 ]
 ONNX_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152"
@@ -79,7 +79,7 @@ def get_unique_models(framework="pytorch"):
         return [
             "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
             "stable_diffusion_1_5", "stable_diffusion_3_medium",  # Both SD models as separate entries
-            "gpu_ops", "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"  # GPU operations benchmark
+            "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"  # GPU operations benchmark
         ]
     elif framework == "onnx":
         return [
