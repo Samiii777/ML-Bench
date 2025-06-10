@@ -187,16 +187,22 @@ def convert_pytorch_to_onnx_detection(model_name, onnx_path, precision="fp32"):
             # Use ResNet backbone
             if backbone_name == "resnet18":
                 self.backbone = models.resnet18(pretrained=True)
+                backbone_channels = 512
             elif backbone_name == "resnet34":
                 self.backbone = models.resnet34(pretrained=True)
+                backbone_channels = 512
             elif backbone_name == "resnet50":
                 self.backbone = models.resnet50(pretrained=True)
+                backbone_channels = 2048
             elif backbone_name == "resnet101":
                 self.backbone = models.resnet101(pretrained=True)
+                backbone_channels = 2048
             elif backbone_name == "resnet152":
                 self.backbone = models.resnet152(pretrained=True)
+                backbone_channels = 2048
             else:
                 self.backbone = models.resnet50(pretrained=True)
+                backbone_channels = 2048
             
             # Remove the final classification layer
             self.backbone = nn.Sequential(*list(self.backbone.children())[:-2])
@@ -204,9 +210,9 @@ def convert_pytorch_to_onnx_detection(model_name, onnx_path, precision="fp32"):
             # Add a simple detection head (for benchmarking)
             # In real applications, this would be a complex FPN + detection head
             self.detection_head = nn.Sequential(
-                nn.AdaptiveAvgPool2d((7, 7)),
+                nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling - ONNX compatible
                 nn.Flatten(),
-                nn.Linear(2048 * 7 * 7, 1000),  # Feature extraction
+                nn.Linear(backbone_channels, 1000),  # Feature extraction
                 nn.ReLU(),
                 nn.Linear(1000, 80 * 4)  # 80 classes * 4 bbox coords (simplified)
             )
