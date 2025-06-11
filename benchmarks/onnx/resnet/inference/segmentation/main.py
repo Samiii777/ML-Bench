@@ -315,8 +315,9 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     min_time = np.min(times)
     max_time = np.max(times)
     
-    # Calculate throughput
+    # Calculate throughput and per-sample latency
     samples_per_second = batch_size / avg_time
+    per_sample_latency_ms = (avg_time * 1000) / batch_size  # ms per sample
     
     # Memory usage tracking
     memory_used_gb = 0
@@ -365,6 +366,7 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     unique_classes = len(np.unique(segmentation_predictions))
     
     print(f"\n=== {model_name.upper()} ONNX SEGMENTATION BENCHMARK RESULTS ===")
+    print(f"Framework: ONNX Runtime")
     print(f"Execution Provider: {execution_provider}")
     print(f"Device: {device_info}")
     print(f"Batch Size: {batch_size}")
@@ -373,10 +375,13 @@ def benchmark_onnx_segmentation(model_name, execution_provider, batch_size=1, wa
     print(f"Output Shape: {segmentation_output.shape}")
     print(f"Detected Classes: {unique_classes} classes")
     print(f"Average Time: {avg_time*1000:.2f} ms")
+    print(f"Per-sample Latency: {per_sample_latency_ms:.2f} ms/sample")
     print(f"Std Dev: {std_time*1000:.2f} ms")
     print(f"Min Time: {min_time*1000:.2f} ms")
     print(f"Max Time: {max_time*1000:.2f} ms")
     print(f"Throughput: {samples_per_second:.2f} samples/sec")
+    print(f"Total GPU Memory Used: {memory_used_gb:.2f} GB")
+    print(f"ONNX Inference Time = {avg_time*1000:.2f} ms")
     print("="*60)
     
     return {

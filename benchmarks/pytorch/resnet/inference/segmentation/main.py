@@ -199,16 +199,16 @@ def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3
     min_time = np.min(times)
     max_time = np.max(times)
     
-    # Calculate throughput
+    # Calculate throughput and per-sample latency
     samples_per_second = batch_size / avg_time
+    per_sample_latency_ms = (avg_time * 1000) / batch_size  # ms per sample
     
     # Memory usage
+    memory_used_gb = 0.0
+    memory_cached_gb = 0.0
     if device.type == "cuda":
-        memory_used = torch.cuda.max_memory_allocated() / 1024**3  # GB
-        memory_cached = torch.cuda.max_memory_reserved() / 1024**3  # GB
-    else:
-        memory_used = 0
-        memory_cached = 0
+        memory_used_gb = torch.cuda.max_memory_allocated() / 1024**3  # GB
+        memory_cached_gb = torch.cuda.max_memory_reserved() / 1024**3  # GB
     
     # Get segmentation results for the first image
     sample_input = image_tensor.unsqueeze(0).to(device)
@@ -219,21 +219,25 @@ def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3
     unique_classes = np.unique(segmentation_result)
     
     print(f"\n=== {model_name.upper()} SEGMENTATION BENCHMARK RESULTS ===")
+    print(f"Framework: PyTorch")
     print(f"Device: {device}")
     print(f"Batch Size: {batch_size}")
     print(f"Precision: {precision}")
     print(f"Input Resolution: {input_batch.shape[2]}x{input_batch.shape[3]}")
     print(f"Detected Classes: {len(unique_classes)} classes")
     print(f"Average Time: {avg_time*1000:.2f} ms")
+    print(f"Per-sample Latency: {per_sample_latency_ms:.2f} ms/sample")
     print(f"Std Dev: {std_time*1000:.2f} ms")
     print(f"Min Time: {min_time*1000:.2f} ms") 
     print(f"Max Time: {max_time*1000:.2f} ms")
     print(f"Throughput: {samples_per_second:.2f} samples/sec")
     
     if device.type == "cuda":
-        print(f"GPU Memory Used: {memory_used:.2f} GB")
-        print(f"GPU Memory Cached: {memory_cached:.2f} GB")
+        print(f"GPU Memory Allocated: {memory_used_gb:.2f} GB")
+        print(f"GPU Memory Cached: {memory_cached_gb:.2f} GB")
+        print(f"Total GPU Memory Used: {memory_cached_gb:.2f} GB")
     
+    print(f"PyTorch Inference Time = {avg_time*1000:.2f} ms")
     print("="*60)
     
     return {
@@ -246,8 +250,8 @@ def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3
         'min_time_ms': min_time * 1000,
         'max_time_ms': max_time * 1000,
         'samples_per_second': samples_per_second,
-        'memory_used_gb': memory_used,
-        'memory_cached_gb': memory_cached,
+        'memory_used_gb': memory_used_gb,
+        'memory_cached_gb': memory_cached_gb,
         'detected_classes': len(unique_classes)
     }
 
