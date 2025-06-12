@@ -356,6 +356,49 @@ class BenchmarkRunner:
                         metrics[key.strip().lower().replace(' ', '_')] = float(value.strip().replace('%', ''))
                 except:
                     pass
+            
+            # Look for training-specific metrics
+            if "Best Validation Accuracy:" in line:
+                try:
+                    accuracy_str = line.split(':')[1].strip().replace('%', '').strip()
+                    metrics['best_validation_accuracy'] = float(accuracy_str)
+                except:
+                    pass
+            
+            if "Best Validation Pixel Accuracy:" in line:
+                try:
+                    accuracy_str = line.split(':')[1].strip().replace('%', '').strip()
+                    metrics['best_validation_pixel_accuracy'] = float(accuracy_str)
+                except:
+                    pass
+            
+            if "Final Training Loss:" in line:
+                try:
+                    loss_str = line.split(':')[1].strip()
+                    metrics['final_training_loss'] = float(loss_str)
+                except:
+                    pass
+            
+            if "Final Validation Loss:" in line:
+                try:
+                    loss_str = line.split(':')[1].strip()
+                    metrics['final_validation_loss'] = float(loss_str)
+                except:
+                    pass
+            
+            if "Number of Epochs:" in line:
+                try:
+                    epochs_str = line.split(':')[1].strip()
+                    metrics['num_epochs'] = int(epochs_str)
+                except:
+                    pass
+            
+            if "Training Mode:" in line:
+                try:
+                    mode_str = line.split(':')[1].strip()
+                    metrics['training_mode'] = mode_str
+                except:
+                    pass
         
         return metrics
     
