@@ -11,6 +11,7 @@ import time
 import sys
 import os
 import numpy as np
+import subprocess
 from pathlib import Path
 
 # Add project root to path for utils import
@@ -55,6 +56,19 @@ class SyntheticDataset(Dataset):
             image = self.transform(image)
         
         return image, label
+
+def get_gpu_memory_usage():
+    """Get GPU memory usage from nvidia-smi"""
+    try:
+        result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used', '--format=csv,noheader,nounits'], 
+                              capture_output=True, text=True, check=True)
+        memory_used_mb = int(result.stdout.strip())
+        return memory_used_mb / 1024  # Convert MB to GB
+    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
+        # Fallback to PyTorch memory tracking if nvidia-smi fails
+        if torch.cuda.is_available():
+            return torch.cuda.memory_reserved() / 1024**3
+        return 0.0
 
 def get_device():
     """Get the best available device"""
@@ -259,10 +273,16 @@ def benchmark_training(model_name, training_mode, precision, batch_size, num_epo
     scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.1)
     
     # Track memory before training
+    initial_memory_nvidia = 0.0
+    peak_memory_nvidia = 0.0
     if device.type == "cuda":
         torch.cuda.reset_peak_memory_stats()
         torch.cuda.synchronize()
         initial_memory = torch.cuda.memory_allocated()
+        initial_memory_nvidia = get_gpu_memory_usage()
+        peak_memory_nvidia = initial_memory_nvidia
+        print(f"Initial GPU memory allocated (PyTorch): {initial_memory / 1024**3:.2f} GB")
+        print(f"Initial GPU memory usage (nvidia-smi): {initial_memory_nvidia:.2f} GB")
     
     print("\nStarting training...")
     
@@ -299,6 +319,12 @@ def benchmark_training(model_name, training_mode, precision, batch_size, num_epo
         print(f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.2f}%")
         print(f"Train Batch Time: {avg_train_batch_time*1000:.2f} ms")
         print(f"Val Batch Time: {avg_val_batch_time*1000:.2f} ms")
+        
+        # Report memory usage after each epoch
+        if device.type == "cuda":
+            current_memory_nvidia = get_gpu_memory_usage()
+            peak_memory_nvidia = max(peak_memory_nvidia, current_memory_nvidia)
+            print(f"GPU Memory - nvidia-smi Current: {current_memory_nvidia:.2f} GB, Peak: {peak_memory_nvidia:.2f} GB")
     
     # Calculate performance metrics
     avg_train_time_per_epoch = total_train_time / num_epochs
@@ -311,18 +337,28 @@ def benchmark_training(model_name, training_mode, precision, batch_size, num_epo
     train_samples_per_sec = samples_per_train_batch / avg_train_time_per_epoch
     val_samples_per_sec = samples_per_val_batch / avg_val_time_per_epoch
     
-    # Memory usage
+    # Memory usage - use nvidia-smi for accurate measurement
     memory_used_gb = 0
     if device.type == "cuda":
         torch.cuda.synchronize()
         peak_memory = torch.cuda.max_memory_allocated()
-        memory_used_gb = peak_memory / 1024**3
+        current_memory_nvidia = get_gpu_memory_usage()
+        peak_memory_nvidia = max(peak_memory_nvidia, current_memory_nvidia)
+        
+        # Use nvidia-smi peak memory as the primary measurement
+        memory_used_gb = peak_memory_nvidia
+        
+        print(f"\nFinal Memory Stats:")
+        print(f"Peak GPU Memory (PyTorch): {peak_memory / 1024**3:.2f} GB")
+        print(f"Peak GPU Memory (nvidia-smi): {peak_memory_nvidia:.2f} GB")
+        print(f"Using nvidia-smi peak memory for benchmark: {memory_used_gb:.2f} GB")
     
     # Count model parameters
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
     print(f"\n=== {model_name.upper()} TRAINING BENCHMARK RESULTS ===")
+    print(f"Framework: PyTorch")
     print(f"Training Mode: {training_mode}")
     print(f"Device: {device}")
     print(f"Precision: {precision}")
@@ -330,7 +366,7 @@ def benchmark_training(model_name, training_mode, precision, batch_size, num_epo
     print(f"Number of Epochs: {num_epochs}")
     print(f"Model Parameters: {total_params:,} total, {trainable_params:,} trainable")
     print(f"Mixed Precision: {'Enabled' if use_amp else 'Disabled'}")
-    print(f"GPU Memory Used: {memory_used_gb:.2f} GB")
+    print(f"Total GPU Memory Used: {memory_used_gb:.2f} GB")
     print()
     print("Performance Metrics:")
     print(f"Training Throughput: {train_samples_per_sec:.2f} samples/sec")
