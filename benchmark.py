@@ -70,7 +70,7 @@ class BenchmarkRunner:
         return str(script_path)
     
     def run_single_benchmark(self, framework: str, model: str, mode: str, use_case: str, 
-                           precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch") -> Dict[str, Any]:
+                           precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch", epochs: int = 3) -> Dict[str, Any]:
         """Run a single benchmark and return results"""
         script_path = self.get_benchmark_script_path(framework, model, mode, use_case)
         
@@ -116,6 +116,8 @@ class BenchmarkRunner:
         # Only add training_mode for training mode, not inference
         if mode == "training":
             cmd.extend(["--training_mode", training_mode])
+            # Add epochs parameter for training
+            cmd.extend(["--num_epochs", str(epochs)])
 
         # Add execution provider for ONNX
         if framework == "onnx" and execution_provider:
@@ -369,6 +371,13 @@ class BenchmarkRunner:
                 try:
                     accuracy_str = line.split(':')[1].strip().replace('%', '').strip()
                     metrics['best_validation_pixel_accuracy'] = float(accuracy_str)
+                except:
+                    pass
+            
+            if "Best Validation Detection Accuracy:" in line:
+                try:
+                    accuracy_str = line.split(':')[1].strip().replace('%', '').strip()
+                    metrics['best_validation_detection_accuracy'] = float(accuracy_str)
                 except:
                     pass
             
@@ -718,7 +727,8 @@ class BenchmarkRunner:
                             result = self.run_single_benchmark(
                                 framework, model, args.mode, use_case,
                                 precision, batch_size, execution_provider,
-                                getattr(args, 'training_mode', 'scratch')
+                                getattr(args, 'training_mode', 'scratch'),
+                                getattr(args, 'epochs', 3)
                             )
                             
                             # Add metadata to result
@@ -1066,7 +1076,8 @@ class BenchmarkRunner:
                 result = self.run_single_benchmark(
                     framework, model_name, args.mode, args.usecase,
                     precision, batch_size, execution_provider,
-                    getattr(args, 'training_mode', 'scratch')
+                    getattr(args, 'training_mode', 'scratch'),
+                    getattr(args, 'epochs', 3)
                 )
                 
                 # Add metadata to result
@@ -1234,6 +1245,8 @@ def main():
     parser.add_argument("--training_mode", type=str, default="scratch",
                        choices=["scratch", "finetune"],
                        help="Training mode: scratch (random weights) or finetune (pre-trained weights)")
+    parser.add_argument("--epochs", type=int, default=3,
+                       help="Number of epochs for training mode (default: 3)")
     
     args = parser.parse_args()
     

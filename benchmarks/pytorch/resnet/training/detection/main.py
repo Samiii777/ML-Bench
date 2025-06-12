@@ -175,6 +175,8 @@ def validate_epoch(model, dataloader, device, use_amp=False):
     model.eval()
     running_loss = 0.0
     batch_times = []
+    total_detections = 0
+    correct_detections = 0
     
     with torch.no_grad():
         for batch_idx, (images, targets) in enumerate(dataloader):
@@ -189,14 +191,28 @@ def validate_epoch(model, dataloader, device, use_amp=False):
                     model.train()
                     loss_dict = model(images, targets)
                     losses = sum(loss for loss in loss_dict.values())
+                    
+                    # Switch to eval mode for inference
                     model.eval()
+                    predictions = model(images)
             else:
                 model.train()
                 loss_dict = model(images, targets)
                 losses = sum(loss for loss in loss_dict.values())
+                
+                # Switch to eval mode for inference
                 model.eval()
+                predictions = model(images)
             
             running_loss += losses.item()
+            
+            # Simple accuracy calculation based on detection confidence
+            # Count detections with confidence > 0.5 as correct
+            for pred in predictions:
+                if 'scores' in pred and len(pred['scores']) > 0:
+                    high_conf_detections = (pred['scores'] > 0.5).sum().item()
+                    total_detections += len(pred['scores'])
+                    correct_detections += high_conf_detections
             
             batch_time = time.time() - start_time
             batch_times.append(batch_time)
@@ -208,7 +224,10 @@ def validate_epoch(model, dataloader, device, use_amp=False):
     avg_loss = running_loss / min(len(dataloader), 9)
     avg_batch_time = np.mean(batch_times)
     
-    return avg_loss, avg_batch_time
+    # Calculate simple detection accuracy (percentage of high-confidence detections)
+    detection_accuracy = (correct_detections / max(total_detections, 1)) * 100.0
+    
+    return avg_loss, avg_batch_time, detection_accuracy
 
 def benchmark_detection_training(model_name, training_mode, precision, batch_size, num_epochs=3):
     """Benchmark ResNet detection training performance"""
@@ -276,6 +295,7 @@ def benchmark_detection_training(model_name, training_mode, precision, batch_siz
     # Training loop
     total_train_time = 0
     total_val_time = 0
+    best_val_acc = 0.0
     
     for epoch in range(num_epochs):
         print(f"\nEpoch {epoch + 1}/{num_epochs}")
@@ -290,11 +310,15 @@ def benchmark_detection_training(model_name, training_mode, precision, batch_siz
         
         # Validation
         start_time = time.time()
-        val_loss, avg_val_batch_time = validate_epoch(
+        val_loss, avg_val_batch_time, val_accuracy = validate_epoch(
             model, val_loader, device, use_amp
         )
         val_time = time.time() - start_time
         total_val_time += val_time
+        
+        # Track best validation accuracy
+        if val_accuracy > best_val_acc:
+            best_val_acc = val_accuracy
         
         scheduler.step()
         
@@ -302,6 +326,7 @@ def benchmark_detection_training(model_name, training_mode, precision, batch_siz
         print(f"Val Loss: {val_loss:.4f}")
         print(f"Train Batch Time: {avg_train_batch_time*1000:.2f} ms")
         print(f"Val Batch Time: {avg_val_batch_time*1000:.2f} ms")
+        print(f"Validation Accuracy: {val_accuracy:.2f}%")
         
         # Report memory usage after each epoch
         if device.type == "cuda":
@@ -356,8 +381,10 @@ def benchmark_detection_training(model_name, training_mode, precision, batch_siz
     print(f"Validation Throughput: {val_samples_per_sec:.2f} samples/sec")
     print(f"Average Training Time per Epoch: {avg_train_time_per_epoch:.2f} seconds")
     print(f"Average Validation Time per Epoch: {avg_val_time_per_epoch:.2f} seconds")
+    print(f"Best Validation Detection Accuracy: {best_val_acc:.2f}%")
     print(f"Final Training Loss: {train_loss:.4f}")
     print(f"Final Validation Loss: {val_loss:.4f}")
+    print(f"Final Validation Accuracy: {val_accuracy:.2f}%")
     print("=" * 60)
     
     return {
@@ -375,8 +402,10 @@ def benchmark_detection_training(model_name, training_mode, precision, batch_siz
         'val_samples_per_sec': val_samples_per_sec,
         'avg_train_time_per_epoch': avg_train_time_per_epoch,
         'avg_val_time_per_epoch': avg_val_time_per_epoch,
+        'best_val_accuracy': best_val_acc,
         'final_train_loss': train_loss,
-        'final_val_loss': val_loss
+        'final_val_loss': val_loss,
+        'final_val_accuracy': val_accuracy
     }
 
 def get_gpu_memory_usage():

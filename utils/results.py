@@ -293,9 +293,15 @@ class BenchmarkResults:
         print(" " * 55 + "SUCCESSFUL BENCHMARK RESULTS")
         print(f"{'='*150}")
         
-        # Create table data
+        # Check if any results are training mode to determine table format
+        has_training = any(r.get("mode") == "training" for r in passed_results)
+        
+        # Create table data with different headers for training vs inference
         table_data = []
-        headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
+        if has_training:
+            headers = ["Test Name", "Framework", "Model", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Accuracy", "Loss", "Epochs", "Memory", "Device"]
+        else:
+            headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
         
         for result in passed_results:
             # Create test name
@@ -305,6 +311,7 @@ class BenchmarkResults:
             
             # Get metrics
             metrics = result.get("metrics", {})
+            mode = result.get("mode", "")
             
             # Determine performance metric based on use case and available metrics
             usecase = result.get("usecase", "")
@@ -327,10 +334,6 @@ class BenchmarkResults:
                 else:
                     performance_str = "N/A"
             
-            # Get latency
-            latency = metrics.get("avg_latency_ms", metrics.get("inference_time_ms", 0))
-            latency_str = f"{latency:.2f} ms" if latency else "N/A"
-            
             # Get memory usage (prioritize total GPU memory, then GPU allocated, then system memory)
             memory_gb = (
                 metrics.get("total_gpu_memory_used_gb") or 
@@ -351,19 +354,55 @@ class BenchmarkResults:
                 provider_short = execution_provider.replace("ExecutionProvider", "")
                 device = f"{device} ({provider_short})"
             
-            table_data.append([
-                test_name,
-                framework,
-                model,
-                result.get("mode", ""),
-                result.get("precision", ""),
-                str(result.get("batch_size", "")),
-                usecase,
-                performance_str,
-                latency_str,
-                memory_str,
-                device
-            ])
+            if has_training and mode == "training":
+                # Training mode - include accuracy, loss, epochs
+                accuracy_str = "N/A"
+                if metrics.get("best_validation_accuracy") is not None:
+                    accuracy_str = f"{metrics['best_validation_accuracy']:.1f}%"
+                elif metrics.get("best_validation_pixel_accuracy") is not None:
+                    accuracy_str = f"{metrics['best_validation_pixel_accuracy']:.1f}%"
+                elif metrics.get("best_validation_detection_accuracy") is not None:
+                    accuracy_str = f"{metrics['best_validation_detection_accuracy']:.1f}%"
+                
+                loss_str = "N/A"
+                if metrics.get("final_training_loss"):
+                    loss_str = f"{metrics['final_training_loss']:.3f}"
+                
+                epochs_str = str(metrics.get("num_epochs", "N/A"))
+                
+                table_data.append([
+                    test_name,
+                    framework,
+                    model,
+                    mode,
+                    result.get("precision", ""),
+                    str(result.get("batch_size", "")),
+                    usecase,
+                    performance_str,
+                    accuracy_str,
+                    loss_str,
+                    epochs_str,
+                    memory_str,
+                    device
+                ])
+            else:
+                # Inference mode - include latency
+                latency = metrics.get("avg_latency_ms", metrics.get("inference_time_ms", 0))
+                latency_str = f"{latency:.2f} ms" if latency else "N/A"
+                
+                table_data.append([
+                    test_name,
+                    framework,
+                    model,
+                    mode,
+                    result.get("precision", ""),
+                    str(result.get("batch_size", "")),
+                    usecase,
+                    performance_str,
+                    latency_str,
+                    memory_str,
+                    device
+                ])
         
         # Print table using rich
         try:
@@ -423,8 +462,15 @@ class BenchmarkResults:
             f.write("No successful results to display\n")
             return
         
-        # Create table data
-        headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
+        # Check if any results are training mode to determine table format
+        has_training = any(r.get("mode") == "training" for r in passed_results)
+        
+        # Create table data with different headers for training vs inference
+        if has_training:
+            headers = ["Test Name", "Framework", "Model", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Accuracy", "Loss", "Epochs", "Memory", "Device"]
+        else:
+            headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
+        
         table_data = []
         
         for result in passed_results:
@@ -435,6 +481,7 @@ class BenchmarkResults:
             
             # Get metrics
             metrics = result.get("metrics", {})
+            mode = result.get("mode", "")
             
             # Determine performance metric based on use case and available metrics
             usecase = result.get("usecase", "")
@@ -457,10 +504,6 @@ class BenchmarkResults:
                 else:
                     performance_str = "N/A"
             
-            # Get latency
-            latency = metrics.get("avg_latency_ms", metrics.get("inference_time_ms", 0))
-            latency_str = f"{latency:.2f} ms" if latency else "N/A"
-            
             # Get memory usage (prioritize total GPU memory, then GPU allocated, then system memory)
             memory_gb = (
                 metrics.get("total_gpu_memory_used_gb") or 
@@ -481,19 +524,55 @@ class BenchmarkResults:
                 provider_short = execution_provider.replace("ExecutionProvider", "")
                 device = f"{device} ({provider_short})"
             
-            table_data.append([
-                test_name,
-                framework,
-                model,
-                result.get("mode", ""),
-                result.get("precision", ""),
-                str(result.get("batch_size", "")),
-                usecase,
-                performance_str,
-                latency_str,
-                memory_str,
-                device
-            ])
+            if has_training and mode == "training":
+                # Training mode - include accuracy, loss, epochs
+                accuracy_str = "N/A"
+                if metrics.get("best_validation_accuracy") is not None:
+                    accuracy_str = f"{metrics['best_validation_accuracy']:.1f}%"
+                elif metrics.get("best_validation_pixel_accuracy") is not None:
+                    accuracy_str = f"{metrics['best_validation_pixel_accuracy']:.1f}%"
+                elif metrics.get("best_validation_detection_accuracy") is not None:
+                    accuracy_str = f"{metrics['best_validation_detection_accuracy']:.1f}%"
+                
+                loss_str = "N/A"
+                if metrics.get("final_training_loss"):
+                    loss_str = f"{metrics['final_training_loss']:.3f}"
+                
+                epochs_str = str(metrics.get("num_epochs", "N/A"))
+                
+                table_data.append([
+                    test_name,
+                    framework,
+                    model,
+                    mode,
+                    result.get("precision", ""),
+                    str(result.get("batch_size", "")),
+                    usecase,
+                    performance_str,
+                    accuracy_str,
+                    loss_str,
+                    epochs_str,
+                    memory_str,
+                    device
+                ])
+            else:
+                # Inference mode - include latency
+                latency = metrics.get("avg_latency_ms", metrics.get("inference_time_ms", 0))
+                latency_str = f"{latency:.2f} ms" if latency else "N/A"
+                
+                table_data.append([
+                    test_name,
+                    framework,
+                    model,
+                    mode,
+                    result.get("precision", ""),
+                    str(result.get("batch_size", "")),
+                    usecase,
+                    performance_str,
+                    latency_str,
+                    memory_str,
+                    device
+                ])
         
         # Write table to file using simple ASCII format
         self._write_simple_table_to_file(f, headers, table_data)
