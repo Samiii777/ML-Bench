@@ -15,6 +15,9 @@ MODEL_FAMILIES = {
     'stable_diffusion_3_medium': 'stable_diffusion',
     'sd3_medium': 'stable_diffusion',
     'sd3': 'stable_diffusion',
+    "gpt2": "llm",
+    "EleutherAI/gpt-neo-125M": "llm",
+    "gpt2-onnx": "llm",
     'gpu_ops': 'gpu_ops',
     'gemm_ops': 'gpu_ops',
     'conv_ops': 'gpu_ops',
@@ -28,10 +31,13 @@ PYTORCH_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
     "stable_diffusion_1_5", "sd1.5", "sd15",
     "stable_diffusion_3_medium", "sd3_medium", "sd3",
+    "gpt2",
+    "EleutherAI/gpt-neo-125M",
     "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"
 ]
 ONNX_MODELS = [
-    "resnet18", "resnet34", "resnet50", "resnet101", "resnet152"
+    "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
+    "gpt2-onnx"
 ]
 
 # ONNX Execution Providers (in order of preference)
@@ -58,6 +64,13 @@ DEFAULT_MODE = "inference"
 DEFAULT_USE_CASE = "classification"
 DEFAULT_USE_CASES = ["classification", "detection", "segmentation", "generation", "compute"]
 
+DEFAULT_MAX_NEW_TOKENS = {
+    "llm": 50, # Default for LLM family
+    "gpt2": 50,
+    "EleutherAI/gpt-neo-125M": 50,
+    "gpt2-onnx": 50,
+}
+
 # Simple VRAM requirement estimates (GB) - only for large models that need checking
 VRAM_REQUIREMENTS = {
     'stable_diffusion_1_5': {'fp32': 12.0, 'fp16': 6.0, 'mixed': 9.0},
@@ -79,11 +92,14 @@ def get_unique_models(framework="pytorch"):
         return [
             "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
             "stable_diffusion_1_5", "stable_diffusion_3_medium",  # Both SD models as separate entries
+            "gpt2",
+            "EleutherAI/gpt-neo-125M",
             "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"  # GPU operations benchmark
         ]
     elif framework == "onnx":
         return [
-            "resnet18", "resnet34", "resnet50", "resnet101", "resnet152"
+            "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
+            "gpt2-onnx"
         ]
     else:
         return get_unique_models("pytorch")  # Default to pytorch
@@ -105,6 +121,15 @@ def get_default_frameworks():
     """Get list of default frameworks to test when none specified"""
     return DEFAULT_FRAMEWORKS.copy()
 
+def get_default_max_new_tokens(model_name: str) -> int:
+    """Get the default max_new_tokens for a given model."""
+    model_family = get_model_family(model_name)
+    if model_name in DEFAULT_MAX_NEW_TOKENS:
+        return DEFAULT_MAX_NEW_TOKENS[model_name]
+    if model_family in DEFAULT_MAX_NEW_TOKENS:
+        return DEFAULT_MAX_NEW_TOKENS[model_family]
+    return 50 # A general default
+
 def get_default_use_cases():
     """Get list of default use cases to test when none specified"""
     return DEFAULT_USE_CASES.copy()
@@ -114,6 +139,8 @@ def get_default_use_case_for_model(model_name):
     model_family = get_model_family(model_name)
     
     if model_family == "stable_diffusion":
+        return "generation"
+    elif model_family == "llm":
         return "generation"
     elif model_family == "resnet":
         return "classification"
@@ -128,6 +155,8 @@ def get_available_frameworks_for_model(model_name):
     
     if model_family == "stable_diffusion":
         return ["pytorch"]  # Only PyTorch for Stable Diffusion
+    elif model_family == "llm":
+        return ["pytorch", "onnx"] # PyTorch and ONNX (placeholder) for LLMs
     elif model_family == "resnet":
         return ["pytorch", "onnx"]  # Both frameworks for ResNet
     elif model_family == "gpu_ops":
@@ -148,7 +177,7 @@ def get_models_for_use_case(use_case, framework="pytorch"):
             compatible_models.append(model)
         elif use_case == "segmentation" and model_family == "resnet":
             compatible_models.append(model)
-        elif use_case == "generation" and model_family == "stable_diffusion":
+        elif use_case == "generation" and (model_family == "stable_diffusion" or model_family == "llm"):
             compatible_models.append(model)
         elif use_case == "compute" and model_family == "gpu_ops":
             compatible_models.append(model)
@@ -158,7 +187,7 @@ def get_models_for_use_case(use_case, framework="pytorch"):
 def get_available_frameworks_for_use_case(use_case):
     """Get list of available frameworks for a specific use case"""
     if use_case == "generation":
-        return ["pytorch"]  # Only PyTorch supports Stable Diffusion
+        return ["pytorch", "onnx"]  # PyTorch and ONNX (placeholder) for generation
     elif use_case == "classification":
         return ["pytorch", "onnx"]  # Both frameworks support ResNet
     elif use_case == "detection":

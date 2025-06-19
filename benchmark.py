@@ -66,6 +66,9 @@ class BenchmarkRunner:
             # Standard path for other models
             base_path = Path("benchmarks") / framework / directory_name / mode / use_case
         
+        elif directory_name == "llm": # New condition for LLMs
+            base_path = Path("benchmarks") / framework / directory_name / mode / use_case
+
         script_path = base_path / "main.py"
         return str(script_path)
     
@@ -571,6 +574,8 @@ class BenchmarkRunner:
                         use_cases_to_test = ["classification", "detection", "segmentation"]
                     elif model_family == "stable_diffusion":
                         use_cases_to_test = ["generation"]
+                    elif model_family == "llm": # New condition for LLMs
+                        use_cases_to_test = ["generation"]
                     elif model_family == "gpu_ops":
                         use_cases_to_test = ["compute"]
                     else:
@@ -682,6 +687,8 @@ class BenchmarkRunner:
                     use_cases_to_test = ["classification", "detection", "segmentation"]
                 elif model_family == "stable_diffusion":
                     use_cases_to_test = ["generation"]
+                    elif model_family == "llm": # New condition for LLMs
+                        use_cases_to_test = ["generation"]
                 elif model_family == "gpu_ops":
                     use_cases_to_test = ["compute"]
                 else:
