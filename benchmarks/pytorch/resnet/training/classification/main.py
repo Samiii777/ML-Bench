@@ -269,8 +269,9 @@ def benchmark_training(model_name, training_mode, precision, batch_size, num_epo
         # Higher learning rate for training from scratch
         optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=1e-4)
     
-    # Learning rate scheduler
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=2, gamma=0.1)
+    # Learning rate scheduler - use a more reasonable schedule for longer training
+    # Reduce LR by 0.5 every 10 epochs instead of 0.1 every 2 epochs
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5)
     
     # Track memory before training
     initial_memory_nvidia = 0.0

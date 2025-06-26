@@ -15,26 +15,28 @@ class BenchmarkResults:
     
     def __init__(self):
         self.results = []
+        self.results_dir = "benchmark_results"
+        # Create results directory if it doesn't exist
+        os.makedirs(self.results_dir, exist_ok=True)
     
     def save_results(self, results: List[Dict[str, Any]], args) -> None:
         """Save benchmark results to files"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_filename = f"benchmark_{args.framework}_{args.model}_{timestamp}"
+        model_str = str(args.model) if args.model else "None"
         
-        # Create output directory
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(exist_ok=True)
+        # Create base filename
+        base_filename = f"benchmark_{args.mode}_{model_str}_{timestamp}"
         
-        # Save as JSON
-        json_file = output_dir / f"{base_filename}.json"
+        # Save JSON results
+        json_file = os.path.join(self.results_dir, f"{base_filename}.json")
         self._save_json(results, json_file, args)
         
-        # Save as CSV
-        csv_file = output_dir / f"{base_filename}.csv"
+        # Save CSV results
+        csv_file = os.path.join(self.results_dir, f"{base_filename}.csv")
         self._save_csv(results, csv_file)
         
         # Save summary
-        summary_file = output_dir / f"{base_filename}_summary.txt"
+        summary_file = os.path.join(self.results_dir, f"{base_filename}_summary.txt")
         self._save_summary(results, summary_file, args)
         
         print(f"\nResults saved to:")
@@ -44,27 +46,20 @@ class BenchmarkResults:
     
     def _save_json(self, results: List[Dict[str, Any]], filepath: Path, args) -> None:
         """Save results as JSON"""
-        metadata = {
-            "timestamp": datetime.now().isoformat(),
-            "framework": args.framework,
-            "model": args.model,
-            "mode": args.mode,
-            "usecase": args.usecase,
-            "precision": args.precision,
-            "batch_size": args.batch_size,
-            "total_results": len(results),
-            "passed": len([r for r in results if r["status"] == "PASS"]),
-            "failed": len([r for r in results if r["status"] == "FAIL"]),
-            "skipped": len([r for r in results if r["status"] == "SKIP"])
-        }
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        output_data = {
-            "benchmark_info": metadata,
+        # Add metadata
+        results_with_metadata = {
+            "metadata": {
+                "timestamp": datetime.now().isoformat(),
+                "args": vars(args)
+            },
             "results": results
         }
         
         with open(filepath, 'w') as f:
-            json.dump(output_data, f, indent=2)
+            json.dump(results_with_metadata, f, indent=2)
     
     def _save_csv(self, results: List[Dict[str, Any]], filepath: Path) -> None:
         """Save results as CSV"""
@@ -104,57 +99,51 @@ class BenchmarkResults:
     
     def _save_summary(self, results: List[Dict[str, Any]], filepath: Path, args) -> None:
         """Save a human-readable summary"""
+        # Ensure directory exists
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
         with open(filepath, 'w') as f:
-            f.write("BENCHMARK SUMMARY REPORT\n")
-            f.write("=" * 50 + "\n\n")
+            f.write("=" * 100 + "\n")
+            f.write("OVERALL COMPREHENSIVE BENCHMARK SUMMARY\n")
+            f.write("=" * 100 + "\n\n")
             
-            # Basic info
-            f.write(f"Framework: {args.framework}\n")
-            f.write(f"Model: {args.model}\n")
-            f.write(f"Mode: {args.mode}\n")
-            f.write(f"Use Case: {args.usecase}\n")
-            f.write(f"Precision: {args.precision}\n")
-            f.write(f"Batch Size: {args.batch_size}\n")
-            f.write(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            
-            # Overall results
+            # Write summary statistics
             total = len(results)
-            passed = sum(1 for r in results if r["status"] == "PASS")
-            failed = total - passed
+            passed = sum(1 for r in results if r.get("status") == "PASS")
+            failed = sum(1 for r in results if r.get("status") == "FAIL")
+            skipped = sum(1 for r in results if r.get("status") == "SKIP")
             
-            f.write(f"Total Benchmarks: {total}\n")
+            f.write(f"Framework tested: {args.framework}\n")
+            f.write(f"Total combinations: {total}\n")
             f.write(f"Passed: {passed}\n")
             f.write(f"Failed: {failed}\n")
-            f.write(f"Success Rate: {(passed/total)*100:.1f}%\n\n")
+            f.write(f"Skipped: {skipped}\n")
+            f.write(f"Success rate: {(passed/total*100 if total > 0 else 0):.1f}% (of attempted tests)\n\n")
             
-            # Add benchmark results table
-            f.write("BENCHMARK RESULTS TABLE\n")
-            f.write("=" * 50 + "\n\n")
-            self._write_table_to_file(f, results)
+            # Write detailed results
+            f.write("=" * 100 + "\n")
+            f.write(" " * 40 + "Benchmark Results Summary\n")
+            f.write("=" * 100 + "\n")
             
-            # Add performance analysis
-            f.write("\nPERFORMANCE ANALYSIS\n")
-            f.write("=" * 50 + "\n\n")
-            self._write_performance_analysis_to_file(f, results)
+            f.write(f"Total configurations: {total}\n")
+            f.write(f"✅ Passed: {passed}\n")
+            f.write(f"❌ Failed: {failed}\n")
+            f.write(f"⚠️   Skipped: {skipped}\n")
+            f.write(f"Success rate: {(passed/total*100 if total > 0 else 0):.1f}% (of attempted tests)\n\n")
             
-            # Detailed results
-            f.write("\nDETAILED RESULTS\n")
-            f.write("-" * 30 + "\n\n")
-            
-            for result in results:
-                f.write(f"Model: {result.get('model', 'Unknown')}\n")
-                f.write(f"Status: {result.get('status', 'Unknown')}\n")
-                f.write(f"Execution Time: {result.get('execution_time', 0):.2f}s\n")
-                
-                if result.get("metrics"):
-                    f.write("Metrics:\n")
-                    for key, value in result["metrics"].items():
-                        f.write(f"  {key}: {value}\n")
-                
-                if result.get("error"):
-                    f.write(f"Error: {result['error']}\n")
-                
-                f.write("\n")
+            if passed > 0:
+                f.write("Successful Results:\n")
+                f.write("-" * 100 + "\n")
+                for result in results:
+                    if result.get("status") == "PASS":
+                        f.write(f"Model: {result.get('model', 'N/A')}\n")
+                        f.write(f"Framework: {result.get('framework', 'N/A')}\n")
+                        f.write(f"Precision: {result.get('precision', 'N/A')}\n")
+                        f.write(f"Batch Size: {result.get('batch_size', 'N/A')}\n")
+                        f.write(f"Metrics: {result.get('metrics', {})}\n")
+                        f.write("-" * 100 + "\n")
+            else:
+                f.write("No successful results to display in table\n")
     
     def _print_simple_table(self, headers: List[str], table_data: List[List[str]]) -> None:
         """Print a simple ASCII table when rich is not available"""
