@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 YOLOv5 Detection Inference Benchmark for ONNX
+Real YOLOv5 implementation using Ultralytics
 """
 
 import onnxruntime as ort
@@ -34,14 +35,67 @@ def get_gpu_memory_usage():
 
 def create_synthetic_image(batch_size=1, height=640, width=640):
     """Create synthetic image data for benchmarking"""
-    # Create random RGB image data in NCHW format
-    images = np.random.rand(batch_size, 3, height, width).astype(np.float32)
+    # Create random RGB image data in NCHW format (0-255 range like YOLOv5 expects)
+    images = np.random.randint(0, 256, (batch_size, 3, height, width), dtype=np.uint8)
+    # Convert to float32 and normalize to 0-1 range as expected by YOLOv5
+    images = images.astype(np.float32) / 255.0
     return images
 
 def convert_yolo_pytorch_to_onnx(model_name, onnx_path, precision="fp32"):
-    """Convert YOLOv5 PyTorch model to ONNX format with specified precision and dynamic batch size"""
+    """Convert YOLOv5 PyTorch model to ONNX format using ultralytics"""
     print(f"Converting {model_name} to ONNX format (precision: {precision}) with dynamic batch size...")
     
+    try:
+        # Try to use ultralytics first (modern approach)
+        try:
+            from ultralytics import YOLO
+            
+            # Map model names to Ultralytics model files
+            model_map = {
+                "yolov5s": "yolov5s.pt",
+                "yolov5m": "yolov5m.pt", 
+                "yolov5l": "yolov5l.pt",
+                "yolov5x": "yolov5x.pt",
+                "yolov5": "yolov5s.pt"  # Default to small if generic "yolov5"
+            }
+            
+            model_file = model_map.get(model_name, "yolov5s.pt")
+            print(f"Loading YOLOv5 model using ultralytics: {model_file}")
+            
+            # Load model (will download if not exists)
+            model = YOLO(model_file)
+            
+            # Export to ONNX with dynamic batch size
+            print("Exporting to ONNX...")
+            onnx_path_from_export = model.export(
+                format='onnx',
+                dynamic=True,  # Enable dynamic batch size
+                half=(precision == "fp16"),  # Use FP16 if requested
+                opset=11,
+                simplify=True,
+                verbose=False
+            )
+            
+            # Move the exported file to our desired location
+            import shutil
+            if onnx_path_from_export != onnx_path:
+                shutil.move(onnx_path_from_export, onnx_path)
+            
+            print(f"✓ Real YOLOv5 model converted and saved to {onnx_path}")
+            return True, "Real YOLOv5"
+            
+        except ImportError:
+            print("Ultralytics not available, trying torch.hub...")
+            # Fallback to torch.hub (older method)
+            return convert_yolo_pytorch_to_onnx_torch_hub(model_name, onnx_path, precision)
+            
+    except Exception as e:
+        print(f"Error loading/converting {model_name}: {str(e)}")
+        print("Falling back to synthetic model...")
+        return False, "Synthetic"
+
+def convert_yolo_pytorch_to_onnx_torch_hub(model_name, onnx_path, precision="fp32"):
+    """Fallback method using torch.hub for YOLOv5 conversion"""
     try:
         # Load YOLOv5 model from torch.hub
         print(f"Loading {model_name} from torch.hub...")
@@ -83,13 +137,13 @@ def convert_yolo_pytorch_to_onnx(model_name, onnx_path, precision="fp32"):
         )
         
         print(f"✓ Model converted and saved to {onnx_path} with dynamic batch size support")
-        return True
+        return True, "Real YOLOv5 (torch.hub)"
         
     except Exception as e:
         print(f"Error loading/converting {model_name}: {str(e)}")
         print("This might be due to missing dependencies (opencv-python, etc.)")
         print("Falling back to synthetic model...")
-        return False
+        return False, "Synthetic"
 
 def create_synthetic_onnx_model():
     """Create a synthetic ONNX model for benchmarking (fallback)"""
@@ -131,7 +185,7 @@ def create_synthetic_onnx_model():
                 'output': {0: 'batch_size'}     # Variable batch size for output too
             }
         )
-        return f.name
+        return f.name, "Synthetic"
 
 def get_yolo_onnx_model_path(model_name, precision):
     """Get the path where the ONNX model should be stored"""
@@ -162,21 +216,21 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
         onnx_model_path = get_yolo_onnx_model_path(model_name, precision)
         
         # Convert PyTorch model to ONNX if not exists or force real model
-        use_real_model = True
+        model_type = "Unknown"
         if not onnx_model_path.exists():
             print(f"ONNX model not found at {onnx_model_path}")
-            success = convert_yolo_pytorch_to_onnx(model_name, str(onnx_model_path), precision)
+            success, model_type = convert_yolo_pytorch_to_onnx(model_name, str(onnx_model_path), precision)
             if not success:
-                use_real_model = False
-                model_path = create_synthetic_onnx_model()
+                model_path, model_type = create_synthetic_onnx_model()
                 print(f"Using synthetic model as fallback")
+            else:
+                model_path = str(onnx_model_path)
         else:
             model_path = str(onnx_model_path)
+            model_type = "Real YOLOv5 (cached)"
             print(f"Using existing ONNX model: {model_path}")
         
-        if use_real_model:
-            model_path = str(onnx_model_path)
-            print(f"Using real YOLOv5 ONNX model")
+        print(f"Model type: {model_type}")
         
         print(f"Creating ONNX Runtime session with {execution_provider}...")
         
@@ -199,6 +253,18 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
                 'device_id': 0,
                 'trt_max_workspace_size': 2147483648,  # 2GB
                 'trt_fp16_enable': precision == 'fp16',
+            })]
+        elif execution_provider == 'ROCMExecutionProvider':
+            providers = [('ROCMExecutionProvider', {
+                'device_id': 0,
+                'arena_extend_strategy': 'kNextPowerOfTwo',
+                'gpu_mem_limit': 2 * 1024 * 1024 * 1024,  # 2GB
+                'do_copy_in_default_stream': True,
+            })]
+        elif execution_provider == 'MIGraphXExecutionProvider':
+            providers = [('MIGraphXExecutionProvider', {
+                'device_id': 0,
+                'fp16_enable': precision == 'fp16',
             })]
         else:
             providers = [execution_provider]
@@ -223,9 +289,15 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
         else:
             raise ValueError(f"Unexpected input shape: {input_shape}")
         
-        # Convert precision if needed
-        if precision == "fp16":
+        # Convert precision based on model's expected input type
+        model_input_type = session.get_inputs()[0].type
+        if model_input_type == 'tensor(float16)' or (precision == "fp16" and 'Real YOLOv5' in model_type):
             input_data = input_data.astype(np.float16)
+        elif model_input_type == 'tensor(float)':
+            input_data = input_data.astype(np.float32)
+        else:
+            # Default to float32
+            input_data = input_data.astype(np.float32)
         
         print(f"Input data shape: {input_data.shape}")
         print(f"Input data dtype: {input_data.dtype}")
@@ -268,7 +340,6 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
         final_memory = get_gpu_memory_usage()
         memory_used_gb = final_memory - initial_memory if final_memory > initial_memory else final_memory
         
-        model_type = "Real YOLOv5" if use_real_model else "Synthetic"
         print(f"\n=== {model_name.upper()} ONNX DETECTION BENCHMARK RESULTS ===")
         print(f"Framework: ONNX Runtime")
         print(f"Model Type: {model_type}")
@@ -291,7 +362,7 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
         print(f"\nFINAL RESULT: {throughput:.2f} samples/sec")
         
         # Clean up temporary file only if using synthetic model
-        if not use_real_model:
+        if model_type == "Synthetic":
             try:
                 os.unlink(model_path)
             except:
@@ -317,16 +388,17 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
 def main():
     parser = argparse.ArgumentParser(description='ONNX YOLOv5 Detection Benchmark')
     parser.add_argument('--model', type=str, default='yolov5s',
-                       choices=['yolov5s', 'yolov5m', 'yolov5l', 'yolov5x'],
+                       choices=['yolov5s', 'yolov5m', 'yolov5l', 'yolov5x', 'yolov5'],
                        help='YOLOv5 model variant')
     parser.add_argument('--precision', type=str, default='fp32',
                        choices=['fp32', 'fp16', 'mixed'],
                        help='Inference precision')
     parser.add_argument('--batch_size', type=int, default=1,
                        help='Batch size for inference')
-    parser.add_argument('--execution_provider', type=str, default='CUDAExecutionProvider',
-                       choices=['CUDAExecutionProvider', 'TensorrtExecutionProvider', 'CPUExecutionProvider'],
-                       help='ONNX Runtime execution provider')
+    parser.add_argument('--execution_provider', type=str, default='auto',
+                       choices=['CUDAExecutionProvider', 'TensorrtExecutionProvider', 'CPUExecutionProvider', 
+                               'ROCMExecutionProvider', 'MIGraphXExecutionProvider', 'auto'],
+                       help='ONNX Runtime execution provider (auto = select best available)')
     parser.add_argument('--num_warmup', type=int, default=10,
                        help='Number of warmup iterations')
     parser.add_argument('--num_runs', type=int, default=100,
@@ -341,12 +413,23 @@ def main():
     print(f"PyTorch version: {torch.__version__}")
     print()
     
-    # Validate execution provider
+    # Auto-select execution provider if requested
     available_providers = ort.get_available_providers()
-    if args.execution_provider not in available_providers:
-        print(f"Error: {args.execution_provider} not available")
-        print(f"Available providers: {available_providers}")
-        sys.exit(1)
+    if args.execution_provider == 'auto':
+        # Priority order: TensorRT > CUDA > ROCm > MIGraphX > CPU
+        provider_priority = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 
+                           'ROCMExecutionProvider', 'MIGraphXExecutionProvider', 'CPUExecutionProvider']
+        for provider in provider_priority:
+            if provider in available_providers:
+                args.execution_provider = provider
+                print(f"Auto-selected execution provider: {provider}")
+                break
+    else:
+        # Validate specific execution provider
+        if args.execution_provider not in available_providers:
+            print(f"Error: {args.execution_provider} not available")
+            print(f"Available providers: {available_providers}")
+            sys.exit(1)
     
     # Force reconversion if requested
     if args.force_convert:
