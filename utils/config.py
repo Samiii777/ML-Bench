@@ -67,12 +67,30 @@ ONNX_MODELS = [
     "bert-base-uncased", "bert-base-cased", "bert-large-uncased", "bert-large-cased", "bert"
 ]
 
-# ONNX Execution Providers (in order of preference)
-ONNX_EXECUTION_PROVIDERS = [
-    "CUDAExecutionProvider",
-    "TensorrtExecutionProvider", 
-    "CPUExecutionProvider"
-]
+# ONNX Execution Providers (dynamically detected)
+def _get_available_onnx_execution_providers():
+    """Get list of available ONNX execution providers for this system"""
+    try:
+        import onnxruntime as ort
+        available_providers = ort.get_available_providers()
+        
+        # Priority order: TensorRT > CUDA > ROCm > MIGraphX > CPU
+        provider_priority = [
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider", 
+            "ROCMExecutionProvider",
+            "MIGraphXExecutionProvider",
+            "CPUExecutionProvider"
+        ]
+        
+        # Return providers in priority order, only if available
+        return [provider for provider in provider_priority if provider in available_providers]
+        
+    except ImportError:
+        # Fallback if onnxruntime not available
+        return ["CUDAExecutionProvider", "TensorrtExecutionProvider", "CPUExecutionProvider"]
+
+ONNX_EXECUTION_PROVIDERS = _get_available_onnx_execution_providers()
 
 # Default settings
 DEFAULT_FRAMEWORKS = ["pytorch", "onnx"]
