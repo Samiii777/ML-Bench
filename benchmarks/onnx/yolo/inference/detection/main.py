@@ -42,77 +42,66 @@ def create_synthetic_image(batch_size=1, height=640, width=640):
     return images
 
 def convert_yolo_pytorch_to_onnx(model_name, onnx_path, precision="fp32"):
-    """Convert YOLOv5 PyTorch model to ONNX format using ultralytics"""
-    print(f"Converting {model_name} to ONNX format (precision: {precision}) with dynamic batch size...")
+    """Download pre-trained YOLOv5 ONNX model directly from official releases"""
+    print(f"Downloading {model_name} ONNX model (precision: {precision})...")
     
     try:
-        # Try to use ultralytics first (modern approach)
-        try:
-            from ultralytics import YOLO
-            
-            # Map model names to Ultralytics model files
-            model_map = {
-                "yolov5s": "yolov5s.pt",
-                "yolov5m": "yolov5m.pt", 
-                "yolov5l": "yolov5l.pt",
-                "yolov5x": "yolov5x.pt",
-                "yolov5": "yolov5s.pt"  # Default to small if generic "yolov5"
-            }
-            
-            model_file = model_map.get(model_name, "yolov5s.pt")
-            print(f"Loading YOLOv5 model using ultralytics: {model_file}")
-            
-            # Load model (will download if not exists)
-            model = YOLO(model_file)
-            
-            # Export to ONNX with dynamic batch size
-            print("Exporting to ONNX...")
-            onnx_path_from_export = model.export(
-                format='onnx',
-                dynamic=True,  # Enable dynamic batch size
-                half=(precision == "fp16"),  # Use FP16 if requested
-                opset=11,
-                simplify=True,
-                verbose=False
-            )
-            
-            # Move the exported file to our desired location
-            import shutil
-            if onnx_path_from_export != onnx_path:
-                shutil.move(onnx_path_from_export, onnx_path)
-            
-            print(f"✓ Real YOLOv5 model converted and saved to {onnx_path}")
-            return True, "Real YOLOv5"
-            
-        except ImportError:
-            print("Ultralytics not available, trying torch.hub...")
-            # Fallback to torch.hub (older method)
-            return convert_yolo_pytorch_to_onnx_torch_hub(model_name, onnx_path, precision)
-            
+        import urllib.request
+        import ssl
+        
+        # Map model names to official ONNX download URLs
+        model_urls = {
+            "yolov5s": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5s.onnx",
+            "yolov5m": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5m.onnx", 
+            "yolov5l": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5l.onnx",
+            "yolov5x": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5x.onnx",
+            "yolov5": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5s.onnx"  # Default to small
+        }
+        
+        model_url = model_urls.get(model_name, model_urls["yolov5s"])
+        print(f"Downloading from: {model_url}")
+        
+        # Create directory for ONNX file if it doesn't exist
+        os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
+        
+        # Download with SSL context (some systems require this)
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        with urllib.request.urlopen(model_url, context=ssl_context) as response:
+            with open(onnx_path, 'wb') as f:
+                f.write(response.read())
+        
+        print(f"✓ Real YOLOv5 ONNX model downloaded to {onnx_path}")
+        
+        # Note: The official ONNX models are FP32, so for FP16 we'll use FP32 model with FP16 inference
+        if precision == "fp16":
+            print("Note: Using FP32 model with FP16 inference (official YOLOv5 ONNX models are FP32)")
+        
+        return True, "Real YOLOv5 (Downloaded)"
+        
     except Exception as e:
-        print(f"Error loading/converting {model_name}: {str(e)}")
+        print(f"Error downloading {model_name}: {str(e)}")
         print("Falling back to synthetic model...")
         return False, "Synthetic"
 
 def convert_yolo_pytorch_to_onnx_torch_hub(model_name, onnx_path, precision="fp32"):
-    """Fallback method using torch.hub for YOLOv5 conversion"""
+    """Fallback method using torch.hub for YOLOv5 conversion (likely to fail without ultralytics)"""
     try:
-        # Load YOLOv5 model from torch.hub
-        print(f"Loading {model_name} from torch.hub...")
+        print(f"Trying torch.hub as fallback for {model_name}...")
+        
+        # This will likely fail since torch.hub YOLOv5 now requires ultralytics
         model = torch.hub.load('ultralytics/yolov5', model_name, pretrained=True, trust_repo=True)
         model.eval()
         
-        print(f"✓ Successfully loaded {model_name}")
+        print(f"✓ Successfully loaded {model_name} via torch.hub")
         
         # Handle precision conversion
         if precision == "fp16":
             model = model.half()
             dummy_input = torch.randn(1, 3, 640, 640, dtype=torch.float16)
             print("Converting model to FP16 precision")
-        elif precision == "mixed":
-            # For mixed precision, export as FP32 model - ONNX Runtime will optimize automatically
-            dummy_input = torch.randn(1, 3, 640, 640)
-            print("Exporting FP32 model for mixed precision optimization by ONNX Runtime")
         else:
             dummy_input = torch.randn(1, 3, 640, 640)
         
@@ -140,9 +129,7 @@ def convert_yolo_pytorch_to_onnx_torch_hub(model_name, onnx_path, precision="fp3
         return True, "Real YOLOv5 (torch.hub)"
         
     except Exception as e:
-        print(f"Error loading/converting {model_name}: {str(e)}")
-        print("This might be due to missing dependencies (opencv-python, etc.)")
-        print("Falling back to synthetic model...")
+        print(f"torch.hub fallback failed: {str(e)}")
         return False, "Synthetic"
 
 def create_synthetic_onnx_model():
@@ -215,14 +202,21 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
         # Get ONNX model path
         onnx_model_path = get_yolo_onnx_model_path(model_name, precision)
         
-        # Convert PyTorch model to ONNX if not exists or force real model
+        # Download or use existing ONNX model
         model_type = "Unknown"
         if not onnx_model_path.exists():
             print(f"ONNX model not found at {onnx_model_path}")
+            # Try direct download first
             success, model_type = convert_yolo_pytorch_to_onnx(model_name, str(onnx_model_path), precision)
             if not success:
-                model_path, model_type = create_synthetic_onnx_model()
-                print(f"Using synthetic model as fallback")
+                # Try torch.hub as fallback (likely to fail without ultralytics)
+                print("Direct download failed, trying torch.hub fallback...")
+                success, model_type = convert_yolo_pytorch_to_onnx_torch_hub(model_name, str(onnx_model_path), precision)
+                if not success:
+                    model_path, model_type = create_synthetic_onnx_model()
+                    print(f"Using synthetic model as fallback")
+                else:
+                    model_path = str(onnx_model_path)
             else:
                 model_path = str(onnx_model_path)
         else:
