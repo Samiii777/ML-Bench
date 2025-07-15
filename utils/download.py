@@ -89,7 +89,7 @@ def download_coco_classes(force_download=False):
             'scissors', 'teddy bear', 'hair drier', 'toothbrush'
         ]
         
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             for class_name in coco_classes:
                 f.write(class_name + '\n')
         
