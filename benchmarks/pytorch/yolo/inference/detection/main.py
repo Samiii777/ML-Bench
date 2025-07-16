@@ -24,14 +24,14 @@ for parent in project_root.parents:
 from utils.download import get_sample_image_path
 
 def get_gpu_memory_usage():
-    """Get GPU memory usage from nvidia-smi"""
+    """Get GPU memory usage using cross-platform method"""
     try:
-        result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used', '--format=csv,noheader,nounits'], 
-                              capture_output=True, text=True, check=True)
-        memory_used_mb = int(result.stdout.strip())
-        return memory_used_mb / 1024  # Convert MB to GB
-    except (subprocess.CalledProcessError, FileNotFoundError, ValueError):
-        # Fallback to PyTorch memory tracking if nvidia-smi fails
+        from utils.shared_device_utils import get_gpu_memory_efficient
+        memory_info = get_gpu_memory_efficient()
+        return memory_info.get('total_gpu_used_gb', 0.0)
+    except Exception as e:
+        print(f"Warning: Could not get GPU memory usage: {e}")
+        # Fallback to PyTorch memory tracking if available
         if torch.cuda.is_available():
             return torch.cuda.memory_reserved() / 1024**3
         return 0.0
