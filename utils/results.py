@@ -58,7 +58,7 @@ class BenchmarkResults:
             "results": results
         }
         
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             json.dump(results_with_metadata, f, indent=2)
     
     def _save_csv(self, results: List[Dict[str, Any]], filepath: Path) -> None:
@@ -102,7 +102,7 @@ class BenchmarkResults:
         # Ensure directory exists
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
-        with open(filepath, 'w') as f:
+        with open(filepath, 'w', encoding='utf-8') as f:
             f.write("=" * 100 + "\n")
             f.write("OVERALL COMPREHENSIVE BENCHMARK SUMMARY\n")
             f.write("=" * 100 + "\n\n")
