@@ -2,6 +2,9 @@
 Simple configuration for the benchmarking framework
 """
 
+# Configuration flags
+SKIP_VRAM_CHECK = False  # Set to True to disable VRAM requirement checking
+
 # Model family mappings
 MODEL_FAMILIES = {
     'resnet18': 'resnet',
@@ -110,7 +113,8 @@ DEFAULT_MODE = "inference"
 DEFAULT_USE_CASE = "classification"
 DEFAULT_USE_CASES = ["classification", "detection", "segmentation", "generation", "compute", "text_generation"]
 
-# Simple VRAM requirement estimates (GB) - only for large models that need checking
+# VRAM requirements (GB) based on actual benchmark results - only for large models that need checking
+# Values are for batch size 1; actual usage scales with batch size
 VRAM_REQUIREMENTS = {
     # BERT models
     'bert-base-uncased': {'fp32': 2.0, 'fp16': 1.0, 'mixed': 1.5},
@@ -118,12 +122,12 @@ VRAM_REQUIREMENTS = {
     'bert-large-uncased': {'fp32': 4.0, 'fp16': 2.0, 'mixed': 3.0},
     'bert-large-cased': {'fp32': 4.0, 'fp16': 2.0, 'mixed': 3.0},
     'bert': {'fp32': 2.0, 'fp16': 1.0, 'mixed': 1.5},
-    'stable_diffusion_1_5': {'fp32': 12.0, 'fp16': 6.0, 'mixed': 9.0},
-    'sd1.5': {'fp32': 12.0, 'fp16': 6.0, 'mixed': 9.0},
-    'sd15': {'fp32': 12.0, 'fp16': 6.0, 'mixed': 9.0},
-    'stable_diffusion_3_medium': {'fp32': '>24GB', 'fp16': 20.0, 'mixed': '>24GB'},
-    'sd3_medium': {'fp32': '>24GB', 'fp16': 20.0, 'mixed': '>24GB'},
-    'sd3': {'fp32': '>24GB', 'fp16': 20.0, 'mixed': '>24GB'},
+    'stable_diffusion_1_5': {'fp32': 6.5, 'fp16': 4.0, 'mixed': 8.0},
+    'sd1.5': {'fp32': 6.5, 'fp16': 4.0, 'mixed': 8.0},
+    'sd15': {'fp32': 6.5, 'fp16': 4.0, 'mixed': 8.0},
+    'stable_diffusion_3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
+    'sd3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
+    'sd3': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
     'llama': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
     'llama-2': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
     'llama2': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
@@ -269,8 +273,9 @@ def get_available_frameworks_for_use_case(use_case):
 
 def get_vram_requirement(model: str, precision: str = 'fp32', batch_size: int = 1) -> str:
     """
-    Get VRAM requirement estimate for a model configuration
+    Get VRAM requirement for a model configuration based on actual benchmark results
     Returns string like "4.5GB" or ">24GB"
+    Values are empirically measured for batch size 1 and scaled up for larger batches
     """
     model_key = model.lower()
     
@@ -320,6 +325,10 @@ def should_skip_for_vram(model: str, precision: str, batch_size: int, available_
     Check if a configuration should be skipped due to VRAM constraints
     Returns (should_skip, reason)
     """
+    # Check if VRAM checking is disabled
+    if SKIP_VRAM_CHECK:
+        return False, "VRAM checking disabled"
+    
     model_key = model.lower()
     
     # Only check VRAM for models in the requirements table (large models like Stable Diffusion)
@@ -339,3 +348,30 @@ def should_skip_for_vram(model: str, precision: str, batch_size: int, available_
             return False, f"Should fit: {requirement} required, {available_vram_gb:.1f}GB available"
     except:
         return False, "Unknown VRAM requirement" 
+
+def set_skip_vram_check(skip: bool):
+    """
+    Enable or disable VRAM requirement checking
+    
+    Args:
+        skip (bool): True to disable VRAM checking, False to enable it
+    """
+    global SKIP_VRAM_CHECK
+    SKIP_VRAM_CHECK = skip
+
+def get_skip_vram_check() -> bool:
+    """
+    Get the current state of VRAM checking
+    
+    Returns:
+        bool: True if VRAM checking is disabled, False if enabled
+    """
+    return SKIP_VRAM_CHECK
+
+def disable_vram_check():
+    """Convenience function to disable VRAM checking"""
+    set_skip_vram_check(True)
+
+def enable_vram_check():
+    """Convenience function to enable VRAM checking"""
+    set_skip_vram_check(False) 
