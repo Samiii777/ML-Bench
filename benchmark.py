@@ -18,7 +18,7 @@ import torch
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case
+from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case, set_skip_vram_check
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
 from utils.safe_print import safe_print, format_success_message, get_safe_checkmark
@@ -1247,6 +1247,8 @@ def main():
                        help="Training mode: scratch (random weights) or finetune (pre-trained weights)")
     parser.add_argument("--epochs", type=int, default=3,
                        help="Number of epochs for training mode (default: 3)")
+    parser.add_argument("--skip-vram-check", action="store_true",
+                       help="Skip VRAM requirement checking and run all benchmarks regardless of memory constraints")
     
     args = parser.parse_args()
     
@@ -1261,6 +1263,11 @@ def main():
     
     # Create runner
     runner = BenchmarkRunner()
+    
+    # Set VRAM check flag based on command line argument
+    if getattr(args, 'skip_vram_check', False):
+        set_skip_vram_check(True)
+        print("VRAM checking disabled - all benchmarks will run regardless of memory constraints")
     
     # Check memory requirements if requested
     if getattr(args, 'check_memory', False):
