@@ -11,10 +11,22 @@ import platform
 import signal
 import subprocess
 import time
+import socket
 from pathlib import Path
 
 # Add utils to path
 sys.path.append(str(Path(__file__).parent))
+
+def find_available_port(start_port=8501, max_attempts=10):
+    """Find an available port starting from start_port"""
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(('localhost', port))
+                return port
+        except OSError:
+            continue
+    return None
 
 def check_dependencies():
     """Check if required visualization dependencies are installed"""
@@ -48,6 +60,17 @@ def launch_dashboard(port: int = 8501, results_dir: str = "benchmark_results"):
     import signal
     import threading
     import time
+    
+    # Find an available port
+    available_port = find_available_port(port)
+    if available_port is None:
+        print(f"❌ No available ports found in range {port}-{port+9}")
+        print("💡 Try stopping other Streamlit instances or use a different port range")
+        return
+    
+    if available_port != port:
+        print(f"⚠️  Port {port} in use, using port {available_port} instead")
+        port = available_port
     
     print("🚀 Launching ML-Bench Visualization Dashboard...")
     print(f"🏠 Local access: http://localhost:{port}")

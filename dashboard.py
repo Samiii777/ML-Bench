@@ -8,7 +8,19 @@ import subprocess
 import sys
 import os
 import time
+import socket
 from pathlib import Path
+
+def find_available_port(start_port=8501, max_attempts=10):
+    """Find an available port starting from start_port"""
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind(('localhost', port))
+                return port
+        except OSError:
+            continue
+    return None
 
 def main():
     print("🚀 ML-Bench Visualization Dashboard")
@@ -31,7 +43,16 @@ def main():
             print("👋 Exiting. Run benchmarks first!")
             sys.exit(0)
     
-    port = 8501
+    # Find an available port
+    port = find_available_port()
+    if port is None:
+        print("❌ No available ports found in range 8501-8510")
+        print("💡 Try stopping other Streamlit instances or use a different port range")
+        sys.exit(1)
+    
+    if port != 8501:
+        print(f"⚠️  Port 8501 in use, using port {port} instead")
+    
     print(f"📊 Starting dashboard on port {port}...")
     print(f"🏠 Local access: http://localhost:{port}")
     print(f"🌐 Network access: http://<your-ip>:{port}")
