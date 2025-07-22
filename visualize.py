@@ -7,6 +7,7 @@ Launch interactive dashboard or create CLI visualizations of benchmark results
 import argparse
 import sys
 import os
+import platform
 from pathlib import Path
 
 # Add utils to path
@@ -64,8 +65,11 @@ def launch_dashboard(port: int = 8501, results_dir: str = "benchmark_results"):
             "--browser.gatherUsageStats", "false"
         ]
         
-        # Use Popen for better control
-        process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        # Use Popen for better control - Windows-specific flags only on Windows
+        if platform.system() == "Windows":
+            process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+        else:
+            process = subprocess.Popen(cmd)
         
         def signal_handler(signum, frame):
             print(f"\n⚠️  Received signal {signum}. Terminating dashboard...")
