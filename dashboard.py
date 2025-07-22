@@ -33,7 +33,8 @@ def main():
     
     port = 8501
     print(f"📊 Starting dashboard on port {port}...")
-    print(f"🌐 Dashboard URL: http://localhost:{port}")
+    print(f"🏠 Local access: http://localhost:{port}")
+    print(f"🌐 Network access: http://<your-ip>:{port}")
     print()
     print("💡 TO STOP THE DASHBOARD:")
     print("   1. Close this terminal window (recommended)")
@@ -47,9 +48,11 @@ def main():
             sys.executable, "-m", "streamlit", "run",
             "utils/visualizer.py",
             "--server.port", str(port),
+            "--server.address", "0.0.0.0",
             "--server.headless", "false",
             "--server.runOnSave", "false",
             "--browser.gatherUsageStats", "false",
+            "--global.showWarningOnDirectExecution", "false",
             "--theme.backgroundColor", "#FFFFFF",
             "--theme.secondaryBackgroundColor", "#F0F2F6"
         ]
@@ -66,20 +69,33 @@ def main():
             bufsize=1
         )
         
-        # Monitor the output
+        # Monitor the output and capture URLs
         startup_complete = False
+        local_url = None
+        network_url = None
+        
         for line in iter(process.stdout.readline, ''):
             if line:
                 print(f"[Streamlit] {line.strip()}")
                 
-                if "Network URL:" in line or "Local URL:" in line:
-                    if not startup_complete:
-                        print("\n" + "=" * 50)
-                        print("🎉 DASHBOARD IS READY!")
-                        print("🌐 Open your browser and go to the URL above")
-                        print("💡 To stop: Close this terminal window")
-                        print("=" * 50)
-                        startup_complete = True
+                # Capture URLs
+                if "Local URL:" in line:
+                    local_url = line.split("Local URL:")[-1].strip()
+                elif "Network URL:" in line:
+                    network_url = line.split("Network URL:")[-1].strip()
+                
+                # Show summary when we have URLs
+                if (local_url or network_url) and not startup_complete:
+                    print("\n" + "=" * 60)
+                    print("🎉 DASHBOARD IS READY!")
+                    if local_url:
+                        print(f"🏠 Local URL:   {local_url}")
+                    if network_url:
+                        print(f"🌐 Network URL: {network_url}")
+                    print("💡 Use Network URL to access from other devices")
+                    print("💡 To stop: Close this terminal window")
+                    print("=" * 60)
+                    startup_complete = True
         
         process.wait()
         

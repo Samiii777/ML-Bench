@@ -8,6 +8,9 @@ import argparse
 import sys
 import os
 import platform
+import signal
+import subprocess
+import time
 from pathlib import Path
 
 # Add utils to path
@@ -47,8 +50,9 @@ def launch_dashboard(port: int = 8501, results_dir: str = "benchmark_results"):
     import time
     
     print("🚀 Launching ML-Bench Visualization Dashboard...")
-    print(f"📊 Dashboard will be available at: http://localhost:{port}")
-    print("💡 Dashboard will open in your browser automatically")
+    print(f"🏠 Local access: http://localhost:{port}")
+    print(f"🌐 Network access: http://<your-ip>:{port}")
+    print("💡 Dashboard will display exact URLs when ready")
     print("💡 To stop the server:")
     print("   - Close this terminal window, OR")
     print("   - Press Ctrl+C multiple times, OR") 
@@ -60,16 +64,31 @@ def launch_dashboard(port: int = 8501, results_dir: str = "benchmark_results"):
             sys.executable, "-m", "streamlit", "run", 
             "utils/visualizer.py",
             "--server.port", str(port),
+            "--server.address", "0.0.0.0",
             "--server.headless", "false",  # Allow browser opening
             "--server.runOnSave", "false",
-            "--browser.gatherUsageStats", "false"
+            "--browser.gatherUsageStats", "false",
+            "--global.showWarningOnDirectExecution", "false"
         ]
         
         # Use Popen for better control - Windows-specific flags only on Windows
         if platform.system() == "Windows":
-            process = subprocess.Popen(cmd, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+            process = subprocess.Popen(
+                cmd, 
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
+            )
         else:
-            process = subprocess.Popen(cmd)
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
+            )
         
         def signal_handler(signum, frame):
             print(f"\n⚠️  Received signal {signum}. Terminating dashboard...")
@@ -81,14 +100,39 @@ def launch_dashboard(port: int = 8501, results_dir: str = "benchmark_results"):
                 process.kill()
             sys.exit(0)
         
-        # Register signal handlers (though they may not work well on Windows)
+        # Register signal handlers
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
         
         print("⏳ Starting dashboard server...")
-        time.sleep(3)  # Give it time to start
-        print("✅ Dashboard should be running!")
-        print(f"🌐 Open: http://localhost:{port}")
+        
+        # Monitor the output and capture URLs
+        startup_complete = False
+        local_url = None
+        network_url = None
+        
+        for line in iter(process.stdout.readline, ''):
+            if line:
+                print(f"[Streamlit] {line.strip()}")
+                
+                # Capture URLs
+                if "Local URL:" in line:
+                    local_url = line.split("Local URL:")[-1].strip()
+                elif "Network URL:" in line:
+                    network_url = line.split("Network URL:")[-1].strip()
+                
+                # Show summary when we have URLs
+                if (local_url or network_url) and not startup_complete:
+                    print("\n" + "=" * 60)
+                    print("🎉 DASHBOARD IS READY!")
+                    if local_url:
+                        print(f"🏠 Local URL:   {local_url}")
+                    if network_url:
+                        print(f"🌐 Network URL: {network_url}")
+                    print("💡 Use Network URL to access from other devices")
+                    print("💡 To stop: Close this terminal window")
+                    print("=" * 60)
+                    startup_complete = True
         
         # Wait for the process
         process.wait()
