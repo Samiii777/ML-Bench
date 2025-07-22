@@ -1249,6 +1249,12 @@ def main():
                        help="Number of epochs for training mode (default: 3)")
     parser.add_argument("--skip-vram-check", action="store_true",
                        help="Skip VRAM requirement checking and run all benchmarks regardless of memory constraints")
+    parser.add_argument("--visualize", action="store_true",
+                       help="Launch visualization dashboard after benchmarks complete")
+    parser.add_argument("--viz-mode", type=str, choices=["dashboard", "cli", "static"], default="dashboard",
+                       help="Visualization mode: dashboard (interactive web), cli (terminal), or static (HTML report)")
+    parser.add_argument("--viz-port", type=int, default=8501,
+                       help="Port for visualization dashboard (default: 8501)")
     
     args = parser.parse_args()
     
@@ -1276,6 +1282,46 @@ def main():
     
     # Run benchmarks
     runner.run_benchmarks(args)
+    
+    # Launch visualization if requested
+    if getattr(args, 'visualize', False):
+        try:
+            print("\n" + "=" * 60)
+            print("LAUNCHING VISUALIZATION")
+            print("=" * 60)
+            
+            if args.viz_mode == "dashboard":
+                print("🚀 Starting interactive dashboard...")
+                import subprocess
+                import sys
+                subprocess.run([
+                    sys.executable, "visualize.py", 
+                    "--mode", "dashboard",
+                    "--port", str(args.viz_port),
+                    "--results-dir", args.output_dir
+                ])
+            elif args.viz_mode == "cli":
+                print("📈 Generating CLI visualization...")
+                import subprocess
+                import sys
+                subprocess.run([
+                    sys.executable, "visualize.py",
+                    "--mode", "cli",
+                    "--results-dir", args.output_dir
+                ])
+            elif args.viz_mode == "static":
+                print("📊 Creating static HTML report...")
+                import subprocess
+                import sys
+                subprocess.run([
+                    sys.executable, "visualize.py",
+                    "--mode", "static",
+                    "--results-dir", args.output_dir
+                ])
+                
+        except Exception as e:
+            print(f"⚠️  Visualization failed: {e}")
+            print("💡 You can run visualization manually: python visualize.py")
 
 if __name__ == "__main__":
     main()

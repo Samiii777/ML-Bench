@@ -15,7 +15,8 @@ ML-Bench is a comprehensive benchmarking framework designed to evaluate machine 
 - **Hardware Optimization**: CUDA, TensorRT, and CPU execution providers
 - **Memory Monitoring**: Real-time GPU memory usage tracking with NVML
 - **Automated Testing**: Comprehensive benchmarking across all valid configurations
-- **Rich Output Formats**: JSON, CSV, and human-readable summary reports
+- **Rich Output Formats**: JSON, CSV, and human-readable summary reports  
+- **Interactive Visualizations**: Web dashboard, static reports, and CLI charts
 - **Extensible Architecture**: Easy addition of new models and frameworks
 
 ## 📋 Table of Contents
@@ -24,6 +25,7 @@ ML-Bench is a comprehensive benchmarking framework designed to evaluate machine 
 - [Quick Start](#quick-start)
 - [Supported Models](#supported-models)
 - [Usage Examples](#usage-examples)
+- [Visualization](#visualization)
 - [Benchmark Results](#benchmark-results)
 - [Project Structure](#project-structure)
 - [Contributing](#contributing)
@@ -192,6 +194,48 @@ python benchmark.py --comprehensive --output_dir custom_results/
 # Memory-optimized Stable Diffusion
 python benchmark.py --usecase generation --model sd15 --precision fp16 --batch_size 1
 ```
+
+## 📊 Visualization
+
+ML-Bench includes powerful visualization tools to analyze benchmark results through interactive dashboards, static reports, and CLI summaries.
+
+### Quick Visualization
+
+```bash
+# Run benchmarks and launch interactive dashboard
+python benchmark.py --visualize
+
+# Generate static HTML report
+python benchmark.py --visualize --viz-mode static
+
+# Create CLI summary
+python benchmark.py --visualize --viz-mode cli
+```
+
+### Standalone Visualization
+
+```bash
+# Interactive web dashboard (recommended)
+python visualize.py
+
+# CLI analysis
+python visualize.py --mode cli
+
+# Static HTML report
+python visualize.py --mode static
+```
+
+### Visualization Features
+
+- **🌐 Interactive Dashboard**: Real-time filtering, interactive charts, data export
+- **📊 Performance Analysis**: Throughput, latency, memory usage comparisons  
+- **🔥 Framework Heatmaps**: Performance matrices across models and frameworks
+- **⚡ Precision Impact**: FP32 vs FP16 vs Mixed precision analysis
+- **📈 Batch Size Scaling**: Optimal batch size identification
+- **💾 Memory Analysis**: VRAM usage patterns and requirements
+- **🎯 Model Radar Charts**: Multi-dimensional performance comparison
+
+See [VISUALIZATION.md](VISUALIZATION.md) for complete documentation and examples.
 
 ## 🎯 Benchmark Results
 

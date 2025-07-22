@@ -1,0 +1,57 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>ML-Bench Visualization Report</title>
+        <style>
+            body { font-family: Arial, sans-serif; margin: 40px; }
+            h1 { color: #333; }
+            h2 { color: #666; margin-top: 40px; }
+            .chart-container { margin: 20px 0; }
+            .summary { background: #f5f5f5; padding: 20px; border-radius: 5px; }
+        </style>
+    </head>
+    <body>
+        <h1>🚀 ML-Bench Visualization Report</h1>
+        
+        <div class="summary">
+            <h2>📊 Summary Statistics</h2>
+            <p><strong>Total Configurations:</strong> 182</p>
+            <p><strong>Frameworks:</strong> pytorch, onnx</p>
+            <p><strong>Models:</strong> resnet18, resnet50, resnet101, stable_diffusion_1_5, gemm_ops, conv_ops, memory_ops, elementwise_ops, reduction_ops</p>
+            <p><strong>Generated:</strong> 2025-07-22 12:33:24</p>
+        </div>
+        
+        <div class="chart-container">
+            <h2>📈 Performance Comparison</h2>
+            <iframe src="performance_comparison.html" width="100%" height="600"></iframe>
+        </div>
+        
+        <div class="chart-container">
+            <h2>💾 Memory Analysis</h2>
+            <iframe src="memory_analysis.html" width="100%" height="600"></iframe>
+        </div>
+        
+        <div class="chart-container">
+            <h2>📊 Batch Size Scaling</h2>
+            <iframe src="batch_size_scaling.html" width="100%" height="600"></iframe>
+        </div>
+        
+        <div class="chart-container">
+            <h2>⚡ Precision Impact</h2>
+            <iframe src="precision_impact.html" width="100%" height="600"></iframe>
+        </div>
+        
+        <div class="chart-container">
+            <h2>🔥 Framework Heatmap</h2>
+            <iframe src="framework_heatmap.html" width="100%" height="600"></iframe>
+        </div>
+        
+        <div class="chart-container">
+            <h2>🎯 Model Radar Chart</h2>
+            <iframe src="model_radar.html" width="100%" height="600"></iframe>
+        </div>
+        
+    </body>
+    </html>
+    
