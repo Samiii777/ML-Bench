@@ -18,7 +18,7 @@ import torch
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case, set_skip_vram_check
+from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case, get_precisions_for_use_case, set_skip_vram_check
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
 from utils.safe_print import safe_print, format_success_message, get_safe_checkmark
@@ -245,6 +245,15 @@ class BenchmarkRunner:
                     # Extract number from line like "Validation Throughput: 123.45 samples/sec"
                     throughput_str = line.split(':')[1].strip().replace('samples/sec', '').strip()
                     metrics['val_throughput_fps'] = float(throughput_str)
+                except:
+                    pass
+            
+            # Look for tokens per second (for text generation)
+            if "Tokens per second:" in line:
+                try:
+                    # Extract number from line like "Tokens per second: 437.4"
+                    tokens_str = line.split(':')[1].strip()
+                    metrics['tokens_per_second'] = float(tokens_str)
                 except:
                     pass
             
@@ -528,16 +537,7 @@ class BenchmarkRunner:
                 # Test unique models only (no aliases) to avoid duplicates
                 models = get_unique_models(framework)
             
-            # Determine which precisions to test
-            if args.precision is None:
-                if args.mode == "training":
-                    precisions = DEFAULT_TRAINING_PRECISIONS
-                else:
-                    precisions = DEFAULT_PRECISIONS
-            elif isinstance(args.precision, list):
-                precisions = args.precision
-            else:
-                precisions = [args.precision]
+            # Precisions will be determined per use case
             
             # Determine which batch sizes to test
             if args.batch_size is None:
@@ -581,6 +581,14 @@ class BenchmarkRunner:
                     # Check if this use case is available for this framework and mode
                     if should_skip_use_case_for_mode(use_case, args.mode, framework):
                         continue  # Skip this use case for this framework/mode combination
+                    
+                    # Determine which precisions to test for this use case
+                    if args.precision is None:
+                        precisions = get_precisions_for_use_case(use_case, args.mode)
+                    elif isinstance(args.precision, list):
+                        precisions = args.precision
+                    else:
+                        precisions = [args.precision]
                     
                     # Determine batch sizes for this specific use case
                     if args.batch_size is None:
@@ -633,16 +641,7 @@ class BenchmarkRunner:
             # Test unique models only (no aliases) to avoid duplicates
             models = get_unique_models(framework)
         
-        # Determine which precisions to test
-        if args.precision is None:
-            if args.mode == "training":
-                precisions = DEFAULT_TRAINING_PRECISIONS
-            else:
-                precisions = DEFAULT_PRECISIONS  # ["fp32", "fp16"]
-        elif isinstance(args.precision, list):
-            precisions = args.precision
-        else:
-            precisions = [args.precision]
+        # Precisions will be determined per use case
         
         # Determine which batch sizes to test
         if args.batch_size is None:
@@ -692,6 +691,14 @@ class BenchmarkRunner:
                 # Check if this use case is available for this framework and mode
                 if should_skip_use_case_for_mode(use_case, args.mode, framework):
                     continue  # Skip this use case for this framework/mode combination
+                
+                # Determine which precisions to test for this use case
+                if args.precision is None:
+                    precisions = get_precisions_for_use_case(use_case, args.mode)
+                elif isinstance(args.precision, list):
+                    precisions = args.precision
+                else:
+                    precisions = [args.precision]
                 
                 # Determine batch sizes for this specific use case
                 if args.batch_size is None:
@@ -758,6 +765,9 @@ class BenchmarkRunner:
                                     else:
                                         throughput = metrics.get("throughput_fps", 0)
                                         safe_print(f"{checkmark} {throughput:.2f} samples/sec")
+                                elif use_case == "text_generation":
+                                    tokens_per_sec = metrics.get("tokens_per_second", 0)
+                                    safe_print(f"{checkmark} {tokens_per_sec:.1f} tokens/s")
                                 else:
                                     throughput = metrics.get("throughput_fps", 0)
                                     safe_print(f"{checkmark} {throughput:.2f} samples/sec")

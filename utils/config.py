@@ -99,6 +99,14 @@ ONNX_EXECUTION_PROVIDERS = _get_available_onnx_execution_providers()
 DEFAULT_FRAMEWORKS = ["pytorch", "onnx"]
 DEFAULT_PRECISIONS = ["fp32", "fp16", "mixed"]
 DEFAULT_TRAINING_PRECISIONS = ["fp32", "mixed"]  # No pure fp16 for training
+DEFAULT_USE_CASE_PRECISIONS = {
+    "classification": ["fp32", "fp16", "mixed"],
+    "detection": ["fp32", "fp16", "mixed"],
+    "segmentation": ["fp32", "fp16", "mixed"],
+    "generation": ["fp32", "fp16", "mixed"],
+    "compute": ["fp32", "fp16", "mixed"],
+    "text_generation": ["fp16", "mixed"]  # Skip fp32 for LLMs - slower and uses more memory
+}
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64]
 DEFAULT_TRAINING_BATCH_SIZES = {
     "classification": [64],      # Large batch size works for classification
@@ -309,6 +317,13 @@ def get_available_use_cases_for_training(framework="pytorch"):
 def get_training_batch_sizes_for_use_case(use_case):
     """Get training batch sizes for a specific use case"""
     return DEFAULT_TRAINING_BATCH_SIZES.get(use_case, [32])  # Default fallback
+
+def get_precisions_for_use_case(use_case, mode="inference"):
+    """Get precisions for a specific use case and mode"""
+    if mode == "training":
+        return DEFAULT_TRAINING_PRECISIONS
+    else:
+        return DEFAULT_USE_CASE_PRECISIONS.get(use_case, DEFAULT_PRECISIONS)
 
 def should_skip_use_case_for_mode(use_case, mode, framework):
     """Check if a use case should be skipped for a specific mode and framework"""

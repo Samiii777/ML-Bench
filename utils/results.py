@@ -316,6 +316,14 @@ class BenchmarkResults:
                     performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
                 else:
                     performance_str = "N/A"
+            elif usecase == "text_generation":
+                # For text generation use cases, prefer tokens/s over samples/sec
+                if metrics.get("tokens_per_second"):
+                    performance_str = f"{metrics['tokens_per_second']:.1f} tokens/s"
+                elif metrics.get("throughput_fps"):
+                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
+                else:
+                    performance_str = "N/A"
             else:
                 # For other use cases (classification, generation), use samples/sec
                 if metrics.get("throughput_fps"):
@@ -482,6 +490,14 @@ class BenchmarkResults:
                     performance_str = f"{metrics['best_gflops']:.1f} GFLOPS"
                 elif metrics.get("best_bandwidth_gbs"):
                     performance_str = f"{metrics['best_bandwidth_gbs']:.1f} GB/s"
+                elif metrics.get("throughput_fps"):
+                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
+                else:
+                    performance_str = "N/A"
+            elif usecase == "text_generation":
+                # For text generation use cases, prefer tokens/s over samples/sec
+                if metrics.get("tokens_per_second"):
+                    performance_str = f"{metrics['tokens_per_second']:.1f} tokens/s"
                 elif metrics.get("throughput_fps"):
                     performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
                 else:
