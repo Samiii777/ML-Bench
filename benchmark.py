@@ -1226,7 +1226,7 @@ def main():
                        choices=["inference", "training"],
                        help="Benchmark mode (default: inference)")
     parser.add_argument("--usecase", type=str,
-                       choices=["classification", "detection", "segmentation", "generation", "compute"],
+                       choices=["classification", "detection", "segmentation", "generation", "compute", "text_generation"],
                        help="Use case for the benchmark (default: comprehensive - all use cases)")
     parser.add_argument("--precision", type=str, nargs='*',
                        choices=["fp32", "fp16", "mixed", "int8"],
