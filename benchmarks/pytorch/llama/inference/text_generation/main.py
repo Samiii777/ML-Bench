@@ -74,7 +74,11 @@ def run_inference(args):
         
         # Load tokenizer and model
         print(f"Loading tokenizer and model...")
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # Load tokenizer (using default padding)
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name,
+            use_fast=True
+        )
         
         # Set dtype based on precision
         torch_dtype = torch.float32
@@ -94,8 +98,10 @@ def run_inference(args):
         model.eval()
         
         # Set pad token if not present (LLAMA models often don't have pad tokens)
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
+        if tokenizer.pad_token_id is None:
+            tokenizer.add_special_tokens({'pad_token': tokenizer.eos_token})
+            # If we added a pad token, resize embeddings
+            model.resize_token_embeddings(len(tokenizer))
         
         # Sample prompts for benchmarking (more suitable for LLAMA)
         prompts = [
@@ -113,18 +119,21 @@ def run_inference(args):
         print("Warming up...")
         for _ in range(3):
             prompt = prompts[0]
-            inputs = tokenizer(prompt, return_tensors="pt", padding=True, truncation=True, max_length=100)
+            inputs = tokenizer(
+                prompt, 
+                padding=True,           # pad to longest in batch
+                truncation=True,
+                return_tensors="pt"
+            )
             inputs = {k: v.to(device) for k, v in inputs.items()}
             
             with torch.no_grad():
                 _ = model.generate(
                     **inputs,
-                    max_length=120,
+                    max_new_tokens=50,  # Use max_new_tokens instead of max_length
                     num_return_sequences=1,
-                    pad_token_id=tokenizer.eos_token_id,
-                    do_sample=True,
-                    temperature=0.7,
-                    top_p=0.9
+                    pad_token_id=tokenizer.pad_token_id,
+                    do_sample=False  # Use deterministic generation
                 )
             synchronize_device(device)
         
@@ -143,10 +152,9 @@ def run_inference(args):
             # Tokenize batch
             inputs = tokenizer(
                 batch_prompts, 
-                return_tensors="pt", 
-                padding=True, 
-                truncation=True, 
-                max_length=100
+                padding=True,           # pad to longest in batch
+                truncation=True,
+                return_tensors="pt"
             )
             inputs = {k: v.to(device) for k, v in inputs.items()}
             
@@ -157,12 +165,10 @@ def run_inference(args):
             with torch.no_grad():
                 outputs = model.generate(
                     **inputs,
-                    max_length=150,  # Generate meaningful text
+                    max_new_tokens=50,  # Use max_new_tokens for clearer control
                     num_return_sequences=1,
-                    pad_token_id=tokenizer.eos_token_id,
-                    do_sample=True,
-                    temperature=0.7,
-                    top_p=0.9
+                    pad_token_id=tokenizer.pad_token_id,
+                    do_sample=False  # Use deterministic generation to avoid sampling issues with padding
                 )
             
             synchronize_device(device)
