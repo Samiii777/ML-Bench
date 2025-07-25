@@ -70,7 +70,7 @@ class BenchmarkRunner:
         return str(script_path)
     
     def run_single_benchmark(self, framework: str, model: str, mode: str, use_case: str, 
-                           precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch", epochs: int = 3) -> Dict[str, Any]:
+                           precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch", epochs: int = 3, timeout_minutes: int = 5) -> Dict[str, Any]:
         """Run a single benchmark and return results"""
         script_path = self.get_benchmark_script_path(framework, model, mode, use_case)
         
@@ -735,7 +735,8 @@ class BenchmarkRunner:
                                 framework, model, args.mode, use_case,
                                 precision, batch_size, execution_provider,
                                 getattr(args, 'training_mode', 'scratch'),
-                                getattr(args, 'epochs', 3)
+                                getattr(args, 'epochs', 3),
+                                getattr(args, 'timeout', 5) # Pass timeout_minutes
                             )
                             
                             # Add metadata to result
@@ -1087,7 +1088,8 @@ class BenchmarkRunner:
                     framework, model_name, args.mode, args.usecase,
                     precision, batch_size, execution_provider,
                     getattr(args, 'training_mode', 'scratch'),
-                    getattr(args, 'epochs', 3)
+                    getattr(args, 'epochs', 3),
+                    getattr(args, 'timeout', 5) # Pass timeout_minutes
                 )
                 
                 # Add metadata to result
@@ -1259,6 +1261,8 @@ def main():
                        help="Number of epochs for training mode (default: 3)")
     parser.add_argument("--skip-vram-check", action="store_true",
                        help="Skip VRAM requirement checking and run all benchmarks regardless of memory constraints")
+    parser.add_argument("--timeout", type=int, default=5,
+                       help="Timeout for each benchmark in minutes (default: 5). Use 0 to disable timeout.")
     parser.add_argument("--visualize", action="store_true",
                        help="Launch visualization dashboard after benchmarks complete")
     parser.add_argument("--viz-mode", type=str, choices=["dashboard", "cli", "static"], default="dashboard",
