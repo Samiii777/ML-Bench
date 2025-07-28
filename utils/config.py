@@ -105,7 +105,8 @@ DEFAULT_USE_CASE_PRECISIONS = {
     "segmentation": ["fp32", "fp16", "mixed"],
     "generation": ["fp32", "fp16", "mixed"],
     "compute": ["fp32", "fp16", "mixed"],
-    "text_generation": ["fp16", "mixed"]  # Skip fp32 for LLMs - slower and uses more memory
+    "text_generation": ["fp16", "mixed"],  # Skip fp32 for LLMs - slower and uses more memory
+    "text_classification": ["fp32", "fp16", "mixed"]
 }
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64]
 DEFAULT_TRAINING_BATCH_SIZES = {
@@ -114,12 +115,13 @@ DEFAULT_TRAINING_BATCH_SIZES = {
     "segmentation": [16],       # Medium batch size for segmentation
     "generation": [4],          # Very small for Stable Diffusion
     "compute": [64],            # Large for GPU compute operations
-    "text_generation": [1]      # Small batch size for text generation
+    "text_generation": [1],     # Small batch size for text generation
+    "text_classification": [32] # Medium batch size for text classification
 }
 DEFAULT_FRAMEWORK = "pytorch"
 DEFAULT_MODE = "inference"
 DEFAULT_USE_CASE = "classification"
-DEFAULT_USE_CASES = ["classification", "detection", "segmentation", "generation", "compute", "text_generation"]
+DEFAULT_USE_CASES = ["classification", "detection", "segmentation", "generation", "compute", "text_generation", "text_classification"]
 
 # VRAM requirements (GB) based on actual benchmark results - only for large models that need checking
 # Values are for batch size 1; actual usage scales with batch size
@@ -211,7 +213,7 @@ def get_default_use_case_for_model(model_name):
     elif model_family == "yolo":
         return "detection"
     elif model_family == "bert":
-        return "text_generation"
+        return "text_classification"
     elif model_family == "gpu_ops":
         return "compute"
     elif model_family == "llama":
@@ -257,7 +259,9 @@ def get_models_for_use_case(use_case, framework="pytorch"):
             compatible_models.append(model)
         elif use_case == "compute" and model_family == "gpu_ops":
             compatible_models.append(model)
-        elif use_case == "text_generation" and model_family in ["llama", "bert"]:
+        elif use_case == "text_generation" and model_family in ["llama"]:
+            compatible_models.append(model)
+        elif use_case == "text_classification" and model_family == "bert":
             compatible_models.append(model)
     
     return compatible_models
@@ -276,6 +280,8 @@ def get_available_frameworks_for_use_case(use_case):
         return ["pytorch"]  # Only PyTorch for GPU ops
     elif use_case == "text_generation":
         return ["pytorch"]  # Only PyTorch for text generation
+    elif use_case == "text_classification":
+        return ["pytorch", "onnx"]  # Both frameworks support BERT
     else:
         return ["pytorch"]  # Default to PyTorch only
 
