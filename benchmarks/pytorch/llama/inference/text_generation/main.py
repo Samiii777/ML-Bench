@@ -52,7 +52,11 @@ def get_llama_model_name(model_arg):
         "meta-llama/Llama-3.1-8B": "meta-llama/Llama-3.1-8B",
         "meta-llama/Llama-2-7b": "meta-llama/Llama-2-7b-hf",
         "meta-llama/Llama-2-13b": "meta-llama/Llama-2-13b-hf",
-        "meta-llama/Llama-2-70b": "meta-llama/Llama-2-70b-hf"
+        "meta-llama/Llama-2-70b": "meta-llama/Llama-2-70b-hf",
+        # DeepSeek reasoning models
+        "deepseek-r1": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        "deepseek-r1-7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     }
     return llama_models.get(model_arg, "meta-llama/Llama-2-7b-hf")
 
@@ -72,6 +76,9 @@ def run_inference(args):
         # Import transformers here to catch import errors
         from transformers import AutoTokenizer, AutoModelForCausalLM
         
+        # Check model type first
+        is_deepseek = "deepseek" in model_name.lower()
+        
         # Load tokenizer and model
         print(f"Loading tokenizer and model...")
         # Load tokenizer (using default padding)
@@ -89,7 +96,9 @@ def run_inference(args):
             model_name,
             torch_dtype=torch_dtype,
             device_map="auto" if str(device) == "cuda" else None,
-            trust_remote_code=True  # Some LLAMA models may need this
+            trust_remote_code=True,  # Some LLAMA models may need this
+            use_cache=True,  # Enable KV cache for efficiency
+            low_cpu_mem_usage=True  # Reduce CPU memory during loading
         )
         
         # Move to device and set eval mode
@@ -97,20 +106,39 @@ def run_inference(args):
             model = model.to(device)
         model.eval()
         
+        # Memory optimization for larger batch sizes
+        if is_deepseek and args.batch_size > 1:
+            # Enable gradient checkpointing to save memory
+            if hasattr(model, 'gradient_checkpointing_enable'):
+                model.gradient_checkpointing_enable()
+                print(f"Enabled gradient checkpointing for batch size {args.batch_size}")
+        
         # Set pad token if not present (LLAMA models often don't have pad tokens)
         if tokenizer.pad_token_id is None:
             tokenizer.add_special_tokens({'pad_token': tokenizer.eos_token})
             # If we added a pad token, resize embeddings
             model.resize_token_embeddings(len(tokenizer))
         
-        # Sample prompts for benchmarking (more suitable for LLAMA)
-        prompts = [
-            "The future of artificial intelligence is",
-            "In a world where technology advances rapidly",
-            "Machine learning has transformed the way we",
-            "The most important aspect of scientific research is",
-            "Climate change represents one of the greatest challenges"
-        ]
+        # Sample prompts for benchmarking
+        
+        if is_deepseek:
+            # DeepSeek reasoning prompts - include reasoning directive
+            prompts = [
+                "Please reason step by step: What are the key advantages of renewable energy over fossil fuels?",
+                "Please reason step by step: How does machine learning contribute to medical diagnosis improvements?",
+                "Please reason step by step: What factors should be considered when designing sustainable cities?",
+                "Please reason step by step: How can artificial intelligence help address climate change challenges?",
+                "Please reason step by step: What are the ethical implications of autonomous vehicles?"
+            ]
+        else:
+            # Standard LLaMA prompts  
+            prompts = [
+                "The future of artificial intelligence is",
+                "In a world where technology advances rapidly",
+                "Machine learning has transformed the way we",
+                "The most important aspect of scientific research is",
+                "Climate change represents one of the greatest challenges"
+            ]
         
         # Get initial GPU memory
         initial_memory = get_gpu_memory_efficient()
@@ -128,13 +156,26 @@ def run_inference(args):
             inputs = {k: v.to(device) for k, v in inputs.items()}
             
             with torch.no_grad():
-                _ = model.generate(
-                    **inputs,
-                    max_new_tokens=50,  # Use max_new_tokens instead of max_length
-                    num_return_sequences=1,
-                    pad_token_id=tokenizer.pad_token_id,
-                    do_sample=False  # Use deterministic generation
-                )
+                if is_deepseek:
+                    # DeepSeek specific generation parameters (warmup with fewer tokens)
+                    _ = model.generate(
+                        **inputs,
+                        max_new_tokens=20,  # Smaller for warmup
+                        num_return_sequences=1,
+                        pad_token_id=tokenizer.pad_token_id,
+                        do_sample=True,
+                        temperature=0.6,
+                        top_p=0.95
+                    )
+                else:
+                    # Standard LLaMA generation (warmup with fewer tokens)
+                    _ = model.generate(
+                        **inputs,
+                        max_new_tokens=20,  # Smaller for warmup
+                        num_return_sequences=1,
+                        pad_token_id=tokenizer.pad_token_id,
+                        do_sample=False
+                    )
             synchronize_device(device)
         
         # Benchmark runs
@@ -163,13 +204,29 @@ def run_inference(args):
             start_time = time.time()
             
             with torch.no_grad():
-                outputs = model.generate(
-                    **inputs,
-                    max_new_tokens=50,  # Use max_new_tokens for clearer control
-                    num_return_sequences=1,
-                    pad_token_id=tokenizer.pad_token_id,
-                    do_sample=False  # Use deterministic generation to avoid sampling issues with padding
-                )
+                if is_deepseek:
+                    # DeepSeek specific generation parameters
+                    # Reduce tokens for larger batch sizes to save memory
+                    max_tokens = 30 if args.batch_size > 1 else 50
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=max_tokens,
+                        num_return_sequences=1,
+                        pad_token_id=tokenizer.pad_token_id,
+                        do_sample=True,
+                        temperature=0.6,
+                        top_p=0.95
+                    )
+                else:
+                    # Standard LLaMA generation
+                    max_tokens = 30 if args.batch_size > 1 else 50
+                    outputs = model.generate(
+                        **inputs,
+                        max_new_tokens=max_tokens,
+                        num_return_sequences=1,
+                        pad_token_id=tokenizer.pad_token_id,
+                        do_sample=False
+                    )
             
             synchronize_device(device)
             end_time = time.time()
@@ -260,7 +317,7 @@ def main():
     """Main function"""
     parser = argparse.ArgumentParser(description="PyTorch LLAMA Text Generation Inference Benchmark")
     parser.add_argument("--model", type=str, default="meta-llama/Llama-2-7b",
-                       help="LLAMA model name (llama, llama-2, llama-3, meta-llama/Llama-3.1-8B, etc.)")
+                       help="Model name (llama, llama-2, llama-3, meta-llama/Llama-3.1-8B, deepseek-r1, etc.)")
     parser.add_argument("--precision", type=str, default="fp32",
                        choices=["fp32", "fp16", "mixed"],
                        help="Precision for inference")

@@ -48,6 +48,10 @@ MODEL_FAMILIES = {
     'meta-llama/Llama-2-7b': 'llama',
     'meta-llama/Llama-2-13b': 'llama',
     'meta-llama/Llama-2-70b': 'llama',
+    # DeepSeek reasoning models
+    'deepseek-r1': 'llama',
+    'deepseek-r1-7b': 'llama',
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B': 'llama',
 }
 
 # Available models per framework
@@ -61,7 +65,8 @@ PYTORCH_MODELS = [
     "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",
     "llama", "llama-2", "llama2", "llama-3", "llama3",
     "meta-llama/Llama-3.1-8B", "meta-llama/Llama-2-7b",
-    "meta-llama/Llama-2-13b", "meta-llama/Llama-2-70b"
+    "meta-llama/Llama-2-13b", "meta-llama/Llama-2-70b",
+    "deepseek-r1", "deepseek-r1-7b", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 ]
 ONNX_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
@@ -147,6 +152,10 @@ VRAM_REQUIREMENTS = {
     'meta-llama/Llama-2-7b': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
     'meta-llama/Llama-2-13b': {'fp32': 26.0, 'fp16': 13.0, 'mixed': 20.0},
     'meta-llama/Llama-2-70b': {'fp32': '>24GB', 'fp16': 35.0, 'mixed': '>24GB'},
+    # DeepSeek reasoning models (7B parameters)
+    'deepseek-r1': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
+    'deepseek-r1-7b': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
 }
 
 def get_model_family(model_name):
@@ -167,7 +176,8 @@ def get_unique_models(framework="pytorch"):
             "meta-llama/Llama-3.1-8B",  # Latest LLaMA model
             "meta-llama/Llama-2-7b",    # LLaMA 2 models
             "meta-llama/Llama-2-13b",
-            "meta-llama/Llama-2-70b"
+            "meta-llama/Llama-2-70b",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"  # DeepSeek reasoning model
         ]
     elif framework == "onnx":
         return [
