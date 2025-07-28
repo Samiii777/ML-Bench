@@ -536,7 +536,8 @@ def run_inference(params):
         if 'status' in result and result['status'] == 'FAILED':
             print(f"❌ {result['model']}: FAILED - {result['error']}")
         else:
-            print(f"✅ {result['model']}: {result['avg_images_per_second']:.2f} images/sec, {result['memory_usage_gb']:.1f} GB VRAM")
+            memory_str = f"{result['memory_usage_gb']:.1f} GB" if result['memory_usage_gb'] is not None else "N/A"
+            print(f"✅ {result['model']}: {result['avg_images_per_second']:.2f} images/sec, {memory_str} VRAM")
     
     print(f"{'='*60}")
     print("Benchmark completed!")

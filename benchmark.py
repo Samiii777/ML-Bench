@@ -125,8 +125,14 @@ class BenchmarkRunner:
         
         start_time = time.time()
         try:
-            # Use longer timeout for TensorRT due to compilation overhead
-            timeout_seconds = 900 if execution_provider == "TensorrtExecutionProvider" else 300  # 15 min vs 5 min
+            # Handle timeout: 0 means no timeout, otherwise use user-specified timeout
+            if timeout_minutes == 0:
+                timeout_seconds = None  # No timeout
+            else:
+                # Use longer timeout for TensorRT due to compilation overhead
+                timeout_seconds = timeout_minutes * 60
+                if execution_provider == "TensorrtExecutionProvider" and timeout_minutes < 15:
+                    timeout_seconds = 900  # Minimum 15 min for TensorRT
             
             # Set environment variables to include the root directory in Python path
             env = os.environ.copy()
@@ -182,7 +188,6 @@ class BenchmarkRunner:
                 }
                 
         except subprocess.TimeoutExpired:
-            timeout_minutes = 15 if execution_provider == "TensorrtExecutionProvider" else 5
             return {
                 "status": "FAIL",
                 "error": f"Benchmark timed out after {timeout_minutes} minutes",
@@ -736,7 +741,7 @@ class BenchmarkRunner:
                                 precision, batch_size, execution_provider,
                                 getattr(args, 'training_mode', 'scratch'),
                                 getattr(args, 'epochs', 3),
-                                getattr(args, 'timeout', 5) # Pass timeout_minutes
+                                getattr(args, 'timeout', 5)
                             )
                             
                             # Add metadata to result
@@ -1089,7 +1094,7 @@ class BenchmarkRunner:
                     precision, batch_size, execution_provider,
                     getattr(args, 'training_mode', 'scratch'),
                     getattr(args, 'epochs', 3),
-                    getattr(args, 'timeout', 5) # Pass timeout_minutes
+                    getattr(args, 'timeout', 5)
                 )
                 
                 # Add metadata to result
