@@ -139,7 +139,7 @@ def save_images(images, output_dir, prefix="generated"):
         filepath = os.path.join(output_dir, filename)
         image.save(filepath)
         saved_paths.append(filepath)
-        print(f"✓ Saved: {filepath}")
+        print(f"Saved: {filepath}")
     
     return saved_paths
 
@@ -222,7 +222,7 @@ def load_sd3_pipeline(model_id, precision, device, cpu_offload=False):
             pipeline = pipeline.to(device)
         except ValueError as e:
             if "device mapping strategy" in str(e):
-                print("✓ Using device mapping strategy, skipping manual device placement")
+                print("Using device mapping strategy, skipping manual device placement")
             else:
                 raise e
     
@@ -230,14 +230,14 @@ def load_sd3_pipeline(model_id, precision, device, cpu_offload=False):
     try:
         if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
             pipeline.enable_xformers_memory_efficient_attention()
-            print("✓ Enabled xformers memory efficient attention")
+            print("Enabled xformers memory efficient attention")
     except Exception as e:
         print(f"Note: Could not enable memory efficient attention: {e}")
     
     try:
         if hasattr(pipeline, 'enable_model_cpu_offload') and cpu_offload:
             pipeline.enable_model_cpu_offload()
-            print("✓ Enabled model CPU offload")
+            print("Enabled model CPU offload")
     except Exception as e:
         print(f"Note: Could not enable model CPU offload: {e}")
     
@@ -534,10 +534,10 @@ def run_inference(params):
     
     for result in all_results:
         if 'status' in result and result['status'] == 'FAILED':
-            print(f"❌ {result['model']}: FAILED - {result['error']}")
+            print(f"[FAIL] {result['model']}: FAILED - {result['error']}")
         else:
             memory_str = f"{result['memory_usage_gb']:.1f} GB" if result['memory_usage_gb'] is not None else "N/A"
-            print(f"✅ {result['model']}: {result['avg_images_per_second']:.2f} images/sec, {memory_str} VRAM")
+            print(f"[PASS] {result['model']}: {result['avg_images_per_second']:.2f} images/sec, {memory_str} VRAM")
     
     print(f"{'='*60}")
     print("Benchmark completed!")
