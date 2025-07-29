@@ -33,6 +33,9 @@ MODEL_FAMILIES = {
     'stable_diffusion_3_medium': 'stable_diffusion',
     'sd3_medium': 'stable_diffusion',
     'sd3': 'stable_diffusion',
+    'stable_diffusion_3_5_large_turbo': 'stable_diffusion',
+    'sd3.5_turbo': 'stable_diffusion',
+    'sd35_turbo': 'stable_diffusion',
     'gpu_ops': 'gpu_ops',
     'gemm_ops': 'gpu_ops',
     'conv_ops': 'gpu_ops',
@@ -60,6 +63,7 @@ PYTORCH_MODELS = [
     "bert-base-uncased", "bert-base-cased", "bert-large-uncased", "bert-large-cased", "bert",
     "stable_diffusion_1_5", "sd1.5", "sd15",
     "stable_diffusion_3_medium", "sd3_medium", "sd3",
+    "stable_diffusion_3_5_large_turbo", "sd3.5_turbo", "sd35_turbo",
     "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",
     "llama", "llama-3", "llama3",
     "meta-llama/Llama-3.1-8B",
@@ -143,6 +147,10 @@ VRAM_REQUIREMENTS = {
     'stable_diffusion_3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
     'sd3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
     'sd3': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
+    # SD3.5 Large Turbo - 8B params, optimized for 4-step inference (more efficient than regular SD3.5)
+    'stable_diffusion_3_5_large_turbo': {'fp32': 16.0, 'fp16': 10.0, 'mixed': 14.0},
+    'sd3.5_turbo': {'fp32': 16.0, 'fp16': 10.0, 'mixed': 14.0},
+    'sd35_turbo': {'fp32': 16.0, 'fp16': 10.0, 'mixed': 14.0},
     'llama': {'fp32': 16.0, 'fp16': 8.0},
     'llama2': {'fp32': 16.0, 'fp16': 8.0},
     'llama-3': {'fp32': 16.0, 'fp16': 8.0},
@@ -202,7 +210,7 @@ def get_unique_models(framework="pytorch"):
             "inceptionv3",  # InceptionV3 model
             "yolov5s", "yolov5m", "yolov5l", "yolov5x",  # YOLOv5 variants
             "bert-base-uncased", "bert-large-uncased",  # BERT models
-            "stable_diffusion_1_5", "stable_diffusion_3_medium",  # Both SD models as separate entries
+            "stable_diffusion_1_5", "stable_diffusion_3_medium", "stable_diffusion_3_5_large_turbo",  # Stable Diffusion models
             "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",  # GPU operations benchmark
             "meta-llama/Llama-3.1-8B",  # Latest LLaMA model
             "meta-llama/Llama-3.2-1B-Instruct",  # LLaMA 3.2 models

@@ -109,6 +109,12 @@ def get_model_configs():
             'type': 'sd3',
             'model_id': 'stabilityai/stable-diffusion-3-medium-diffusers',
             'display_name': 'Stable Diffusion 3 Medium'
+        },
+        {
+            'name': 'stable_diffusion_3_5_large_turbo',
+            'type': 'sd3_turbo',
+            'model_id': 'stabilityai/stable-diffusion-3.5-large-turbo',
+            'display_name': 'Stable Diffusion 3.5 Large Turbo'
         }
     ]
 
@@ -243,6 +249,56 @@ def load_sd3_pipeline(model_id, precision, device, cpu_offload=False):
     
     return pipeline
 
+def load_sd3_turbo_pipeline(model_id, precision, device, cpu_offload=False):
+    """Load Stable Diffusion 3.5 Large Turbo pipeline"""
+    from diffusers import StableDiffusion3Pipeline
+    
+    if precision == "fp16":
+        pipeline = StableDiffusion3Pipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    elif precision == "mixed":
+        pipeline = StableDiffusion3Pipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    else:  # fp32
+        pipeline = StableDiffusion3Pipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    
+    # Move to device if not using device_map
+    if device.type == "cuda":
+        try:
+            pipeline = pipeline.to(device)
+        except ValueError as e:
+            if "device mapping strategy" in str(e):
+                print("Using device mapping strategy, skipping manual device placement")
+            else:
+                raise e
+    
+    # Enable optimizations for SD3.5 Turbo
+    try:
+        if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
+            pipeline.enable_xformers_memory_efficient_attention()
+            print("Enabled xformers memory efficient attention")
+    except Exception as e:
+        print(f"Note: Could not enable memory efficient attention: {e}")
+    
+    try:
+        if hasattr(pipeline, 'enable_model_cpu_offload') and cpu_offload:
+            pipeline.enable_model_cpu_offload()
+            print("Enabled model CPU offload")
+    except Exception as e:
+        print(f"Note: Could not enable model CPU offload: {e}")
+    
+    return pipeline
+
 def run_single_model_benchmark(model_config, params):
     """Run benchmark for a single model"""
     model_type = model_config['type']
@@ -260,6 +316,10 @@ def run_single_model_benchmark(model_config, params):
     print(f"Inference steps: {params.num_inference_steps}")
     if model_type == 'sd3':
         print(f"Guidance scale: {params.guidance_scale}")
+    elif model_type == 'sd3_turbo':
+        print(f"Guidance scale: 1.0 (optimized for turbo)")
+    elif model_type == 'sd3_turbo':
+        print(f"Guidance scale: 1.0 (optimized for turbo)")
     
     device = get_device()
     
@@ -273,6 +333,8 @@ def run_single_model_benchmark(model_config, params):
         pipeline = load_sd15_pipeline(model_id, params.precision, device)
     elif model_type == 'sd3':
         pipeline = load_sd3_pipeline(model_id, params.precision, device, params.cpu_offload)
+    elif model_type == 'sd3_turbo':
+        pipeline = load_sd3_turbo_pipeline(model_id, params.precision, device, params.cpu_offload)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     
@@ -296,7 +358,7 @@ def run_single_model_benchmark(model_config, params):
                         height=params.height,
                         width=params.width,
                         num_inference_steps=10,  # Fewer steps for warmup
-                        guidance_scale=params.guidance_scale if model_type == 'sd3' else 7.5,
+                        guidance_scale=params.guidance_scale if model_type == 'sd3' else (1.0 if model_type == 'sd3_turbo' else 7.5),
                         num_images_per_prompt=1
                     ).images
             else:
@@ -308,9 +370,11 @@ def run_single_model_benchmark(model_config, params):
                     'num_images_per_prompt': 1
                 }
                 
-                # Add guidance_scale only for SD3
+                # Add guidance_scale based on model type
                 if model_type == 'sd3':
                     generation_kwargs['guidance_scale'] = params.guidance_scale
+                elif model_type == 'sd3_turbo':
+                    generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
                 else:
                     generation_kwargs['guidance_scale'] = 7.5
                 
@@ -344,9 +408,11 @@ def run_single_model_benchmark(model_config, params):
                         'num_images_per_prompt': 1
                     }
                     
-                    # Add guidance_scale only for SD3
+                    # Add guidance_scale based on model type
                     if model_type == 'sd3':
                         generation_kwargs['guidance_scale'] = params.guidance_scale
+                    elif model_type == 'sd3_turbo':
+                        generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
                     else:
                         generation_kwargs['guidance_scale'] = 7.5
                     
@@ -360,9 +426,11 @@ def run_single_model_benchmark(model_config, params):
                     'num_images_per_prompt': 1
                 }
                 
-                # Add guidance_scale only for SD3
+                # Add guidance_scale based on model type
                 if model_type == 'sd3':
                     generation_kwargs['guidance_scale'] = params.guidance_scale
+                elif model_type == 'sd3_turbo':
+                    generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
                 else:
                     generation_kwargs['guidance_scale'] = 7.5
                 
