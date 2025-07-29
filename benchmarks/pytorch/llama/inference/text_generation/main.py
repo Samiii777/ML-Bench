@@ -55,16 +55,20 @@ def get_llama_model_name(model_arg):
     
     # Otherwise, use predefined mappings
     llama_models = {
-        "llama": "meta-llama/Llama-2-7b-hf",
-        "llama-2": "meta-llama/Llama-2-7b-hf",
-        "llama2": "meta-llama/Llama-2-7b-hf",
-        "llama-3": "meta-llama/Llama-3.1-8B",
-        "llama3": "meta-llama/Llama-3.1-8B",
-        # DeepSeek reasoning models
+        "llama2-7b": "meta-llama/Llama-2-7b-hf",
+        "llama3.1-8b": "meta-llama/Llama-3.1-8B",
+        "llama3.2": "meta-llama/Llama-3.2-3B-Instruct",  # Default to 3B model
+        "llama-3.2-1b": "meta-llama/Llama-3.2-1B-Instruct",
+        "llama-3.2-3b": "meta-llama/Llama-3.2-3B-Instruct",
+        "llama3.2-1b": "meta-llama/Llama-3.2-1B-Instruct",  # Without dash version
+        "llama3.2-3b": "meta-llama/Llama-3.2-3B-Instruct",  # Without dash version
+        # DeepSeek reasoning models - user-friendly aliases
+        "deepseek": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
         "deepseek-r1": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-        "deepseek-r1-7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+        "deepseek-r1-7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+        "deepseek-r1-1.5b": "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B"
     }
-    return llama_models.get(model_arg, "meta-llama/Llama-2-7b-hf")
+    return llama_models.get(model_arg, "meta-llama/Llama-3.1-8B")
 
 def run_inference(args):
     """Run LLAMA text generation inference benchmark"""
@@ -84,7 +88,7 @@ def run_inference(args):
         
         # Check model type first
         is_deepseek = "deepseek" in model_name.lower()
-        
+         
         # Load tokenizer and model
         print(f"Loading tokenizer and model...")
         # Load tokenizer (using default padding)
@@ -161,27 +165,14 @@ def run_inference(args):
             )
             inputs = {k: v.to(device) for k, v in inputs.items()}
             
-            with torch.no_grad():
-                if is_deepseek:
-                    # DeepSeek specific generation parameters (warmup with fewer tokens)
-                    _ = model.generate(
-                        **inputs,
-                        max_new_tokens=20,  # Smaller for warmup
-                        num_return_sequences=1,
-                        pad_token_id=tokenizer.pad_token_id,
-                        do_sample=False,
-                        temperature=0.6,
-                        top_p=0.95
-                    )
-                else:
-                    # Standard LLaMA generation (warmup with fewer tokens)
-                    _ = model.generate(
-                        **inputs,
-                        max_new_tokens=20,  # Smaller for warmup
-                        num_return_sequences=1,
-                        pad_token_id=tokenizer.pad_token_id,
-                        do_sample=False
-                    )
+            with torch.no_grad():                   
+                _ = model.generate(
+                    **inputs,
+                    max_new_tokens=20, 
+                    num_return_sequences=1,
+                    pad_token_id=tokenizer.pad_token_id,
+                    do_sample=False
+                )
             synchronize_device(device)
         
         # Benchmark runs
@@ -190,7 +181,7 @@ def run_inference(args):
         tokens_generated = []
         
         # Reduce number of runs for LLAMA models (they're slower)
-        num_runs = max(10, 50 // args.batch_size)
+        num_runs = max(1, 5 // args.batch_size)
         
         for i in range(num_runs):
             # Create batch of prompts
@@ -219,7 +210,7 @@ def run_inference(args):
                         max_new_tokens=max_tokens,
                         num_return_sequences=1,
                         pad_token_id=tokenizer.pad_token_id,
-                        do_sample=True,
+                        do_sample=False,
                         top_p=0.95,
                     )
                 else:
@@ -321,9 +312,9 @@ def run_inference(args):
 def main():
     """Main function"""
     parser = argparse.ArgumentParser(description="PyTorch LLAMA Text Generation Inference Benchmark")
-    parser.add_argument("--model", type=str, default="meta-llama/Llama-2-7b",
-                       help="Model name (llama, deepseek-r1) or HuggingFace model ID (e.g., microsoft/DialoGPT-medium, Qwen/Qwen2.5-7B-Instruct)")
-    parser.add_argument("--precision", type=str, default="fp32",
+    parser.add_argument("--model", type=str, default="meta-llama/Llama-3.2-1B-Instruct",
+                       help="Model name (llama2-7b, llama3.1-8b, llama3.2, llama3.2-1b, llama3.2-3b, deepseek, deepseek-r1-1.5b) or HuggingFace model ID (e.g., microsoft/DialoGPT-medium, Qwen/Qwen2.5-7B-Instruct)")
+    parser.add_argument("--precision", type=str, default="fp16",
                        choices=["fp32", "fp16", "mixed"],
                        help="Precision for inference")
     parser.add_argument("--batch_size", type=int, default=1,

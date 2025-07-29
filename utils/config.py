@@ -48,10 +48,11 @@ MODEL_FAMILIES = {
     'meta-llama/Llama-2-7b': 'llama',
     'meta-llama/Llama-2-13b': 'llama',
     'meta-llama/Llama-2-70b': 'llama',
+    'meta-llama/Llama-3.2-1B-Instruct': 'llama',
+    'meta-llama/Llama-3.2-3B-Instruct': 'llama',
     # DeepSeek reasoning models
-    'deepseek-r1': 'llama',
-    'deepseek-r1-7b': 'llama',
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B': 'llama',
+    'deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B': 'llama',
 }
 
 # Available models per framework
@@ -66,7 +67,8 @@ PYTORCH_MODELS = [
     "llama", "llama-2", "llama2", "llama-3", "llama3",
     "meta-llama/Llama-3.1-8B", "meta-llama/Llama-2-7b",
     "meta-llama/Llama-2-13b", "meta-llama/Llama-2-70b",
-    "deepseek-r1", "deepseek-r1-7b", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+    "meta-llama/Llama-3.2-1B-Instruct", "meta-llama/Llama-3.2-3B-Instruct",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B"
 ]
 ONNX_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
@@ -152,10 +154,12 @@ VRAM_REQUIREMENTS = {
     'meta-llama/Llama-2-7b': {'fp32': 14.0, 'fp16': 7.0},
     'meta-llama/Llama-2-13b': {'fp32': 26.0, 'fp16': 13.0},
     'meta-llama/Llama-2-70b': {'fp32': '>24GB', 'fp16': 35.0},
+    # LLaMA 3.2 models
+    'meta-llama/Llama-3.2-1B-Instruct': {'fp32': 3.0, 'fp16': 1.5},  # 1B parameters
+    'meta-llama/Llama-3.2-3B-Instruct': {'fp32': 6.0, 'fp16': 3.0},  # 3B parameters
     # DeepSeek reasoning models (7B parameters)
-    'deepseek-r1': {'fp32': 14.0, 'fp16': 7.0},
-    'deepseek-r1-7b': {'fp32': 14.0, 'fp16': 7.0},
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B': {'fp32': 14.0, 'fp16': 7.0},
+    'deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B': {'fp32': 3.0, 'fp16': 1.5},  # 1.5B parameters
 }
 
 def get_model_family(model_name):
@@ -208,7 +212,10 @@ def get_unique_models(framework="pytorch"):
             "meta-llama/Llama-2-7b",    # LLaMA 2 models
             "meta-llama/Llama-2-13b",
             "meta-llama/Llama-2-70b",
-            "deepseek-r1", "deepseek-r1-7b", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"  # DeepSeek reasoning model
+            "meta-llama/Llama-3.2-1B-Instruct",  # LLaMA 3.2 models
+            "meta-llama/Llama-3.2-3B-Instruct",
+            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",  # DeepSeek reasoning models
+            "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B"
         ]
     elif framework == "onnx":
         return [
