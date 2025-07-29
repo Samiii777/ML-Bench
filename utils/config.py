@@ -110,7 +110,7 @@ DEFAULT_USE_CASE_PRECISIONS = {
     "segmentation": ["fp32", "fp16", "mixed"],
     "generation": ["fp32", "fp16", "mixed"],
     "compute": ["fp32", "fp16", "mixed"],
-    "text_generation": ["fp16", "mixed"],  # Skip fp32 for LLMs - slower and uses more memory
+    "text_generation": ["fp16"],  # Skip fp32 for LLMs - slower and uses more memory
     "text_classification": ["fp32", "fp16", "mixed"]
 }
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64]
@@ -143,24 +143,55 @@ VRAM_REQUIREMENTS = {
     'stable_diffusion_3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
     'sd3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
     'sd3': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
-    'llama': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
-    'llama-2': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
-    'llama2': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
-    'llama-3': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
-    'llama3': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
-    'meta-llama/Llama-3.1-8B': {'fp32': 16.0, 'fp16': 8.0, 'mixed': 12.0},
-    'meta-llama/Llama-2-7b': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
-    'meta-llama/Llama-2-13b': {'fp32': 26.0, 'fp16': 13.0, 'mixed': 20.0},
-    'meta-llama/Llama-2-70b': {'fp32': '>24GB', 'fp16': 35.0, 'mixed': '>24GB'},
+    'llama': {'fp32': 16.0, 'fp16': 8.0},
+    'llama-2': {'fp32': 16.0, 'fp16': 8.0},
+    'llama2': {'fp32': 16.0, 'fp16': 8.0},
+    'llama-3': {'fp32': 16.0, 'fp16': 8.0},
+    'llama3': {'fp32': 16.0, 'fp16': 8.0},
+    'meta-llama/Llama-3.1-8B': {'fp32': 16.0, 'fp16': 8.0},
+    'meta-llama/Llama-2-7b': {'fp32': 14.0, 'fp16': 7.0},
+    'meta-llama/Llama-2-13b': {'fp32': 26.0, 'fp16': 13.0},
+    'meta-llama/Llama-2-70b': {'fp32': '>24GB', 'fp16': 35.0},
     # DeepSeek reasoning models (7B parameters)
-    'deepseek-r1': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
-    'deepseek-r1-7b': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B': {'fp32': 14.0, 'fp16': 7.0, 'mixed': 10.0},
+    'deepseek-r1': {'fp32': 14.0, 'fp16': 7.0},
+    'deepseek-r1-7b': {'fp32': 14.0, 'fp16': 7.0},
+    'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B': {'fp32': 14.0, 'fp16': 7.0},
 }
 
 def get_model_family(model_name):
     """Get the model family for a given model"""
-    return MODEL_FAMILIES.get(model_name, model_name)
+    # First check explicit mappings
+    if model_name in MODEL_FAMILIES:
+        return MODEL_FAMILIES[model_name]
+    
+    # For HuggingFace models (contain "/"), try to infer family from name
+    if "/" in model_name:
+        model_lower = model_name.lower()
+        
+        # Common model family patterns
+        if any(pattern in model_lower for pattern in ['llama', 'llama-2', 'llama-3']):
+            return 'llama'
+        elif any(pattern in model_lower for pattern in ['bert', 'roberta', 'distilbert']):
+            return 'bert'
+        elif any(pattern in model_lower for pattern in ['deepseek', 'deepseek-r1']):
+            return 'llama'  # DeepSeek reasoning models use LLaMA-like architecture
+        elif any(pattern in model_lower for pattern in ['gpt', 'gpt2', 'gpt-2']):
+            return 'llama'  # GPT models use similar architecture for our purposes
+        elif any(pattern in model_lower for pattern in ['stable-diffusion', 'sd']):
+            return 'stable_diffusion'
+        elif any(pattern in model_lower for pattern in ['resnet']):
+            return 'resnet'
+        elif any(pattern in model_lower for pattern in ['yolo']):
+            return 'yolo'
+        elif any(pattern in model_lower for pattern in ['inception']):
+            return 'inception'
+        else:
+            # Default to LLaMA family for unknown text generation models
+            print(f"Unknown model family for '{model_name}', defaulting to 'llama'")
+            return 'llama'
+    
+    # Fallback to the model name itself
+    return model_name
 
 def get_unique_models(framework="pytorch"):
     """Get list of unique models for a framework, removing aliases"""
@@ -177,7 +208,7 @@ def get_unique_models(framework="pytorch"):
             "meta-llama/Llama-2-7b",    # LLaMA 2 models
             "meta-llama/Llama-2-13b",
             "meta-llama/Llama-2-70b",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"  # DeepSeek reasoning model
+            "deepseek-r1", "deepseek-r1-7b", "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"  # DeepSeek reasoning model
         ]
     elif framework == "onnx":
         return [
@@ -197,6 +228,20 @@ def get_available_models(framework="pytorch"):
         return ONNX_MODELS.copy()
     else:
         return PYTORCH_MODELS.copy()  # Default to pytorch
+
+def is_model_available(model_name, framework="pytorch"):
+    """Check if a model is available for a framework (includes HuggingFace models)"""
+    available_models = get_available_models(framework)
+    
+    # Check if it's in the predefined list
+    if model_name in available_models:
+        return True
+    
+    # If it contains "/", assume it's a HuggingFace model and it's available
+    if "/" in model_name:
+        return True
+    
+    return False
 
 def get_onnx_execution_providers():
     """Get list of ONNX execution providers"""

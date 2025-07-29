@@ -43,7 +43,14 @@ def synchronize_device(device=None):
             torch.mps.synchronize()
 
 def get_bert_model_name(model_arg):
-    """Map model argument to actual Hugging Face model name for classification"""
+    """Map model argument to actual Hugging Face model name for classification or use directly if in HF format"""
+    
+    # If model_arg contains "/" it's likely a HuggingFace model ID - use directly
+    if "/" in model_arg:
+        print(f"Using HuggingFace model directly: {model_arg}")
+        return model_arg
+    
+    # Otherwise, use predefined mappings for classification models
     bert_models = {
         "bert": "nlptown/bert-base-multilingual-uncased-sentiment",
         "bert-base-uncased": "nlptown/bert-base-multilingual-uncased-sentiment", 
@@ -289,7 +296,7 @@ def main():
     """Main function"""
     parser = argparse.ArgumentParser(description="PyTorch BERT Text Classification Inference Benchmark")
     parser.add_argument("--model", type=str, default="bert",
-                       help="BERT model name (bert, bert-base-uncased, bert-base-cased, etc.)")
+                       help="BERT model name (bert, bert-base-uncased) or HuggingFace model ID (e.g., cardiffnlp/twitter-roberta-base-sentiment-latest)")
     parser.add_argument("--precision", type=str, default="fp32",
                        choices=["fp32", "fp16", "mixed"],
                        help="Precision for inference")

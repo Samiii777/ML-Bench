@@ -18,7 +18,7 @@ import torch
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case, get_precisions_for_use_case, set_skip_vram_check
+from utils.config import get_model_family, get_available_models, is_model_available, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case, get_precisions_for_use_case, set_skip_vram_check
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
 from utils.safe_print import safe_print, format_success_message, get_safe_checkmark
@@ -1238,7 +1238,7 @@ def main():
                        choices=["pytorch", "onnx", "tensorflow"],
                        help="ML framework to benchmark (default: all available)")
     parser.add_argument("--model", type=str, nargs='*',
-                       help="Model name (e.g., resnet50, resnet for all resnet models, default: all available)")
+                       help="Model name (e.g., resnet50, deepseek-r1) or HuggingFace model ID (e.g., microsoft/DialoGPT-medium, deepseek-ai/DeepSeek-R1-Distill-Qwen-7B, default: all available)")
     parser.add_argument("--mode", type=str,
                        choices=["inference", "training"],
                        help="Benchmark mode (default: inference)")

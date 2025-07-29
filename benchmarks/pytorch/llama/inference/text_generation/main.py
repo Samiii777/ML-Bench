@@ -10,6 +10,10 @@ import sys
 import numpy as np
 from pathlib import Path
 
+torch.autograd.set_detect_anomaly(True)
+torch.set_printoptions(profile="full")
+torch.set_flush_denormal(True)
+
 # Add project root to path for utils import
 project_root = Path(__file__).resolve()
 for parent in project_root.parents:
@@ -42,21 +46,23 @@ def synchronize_device(device=None):
             torch.mps.synchronize()
 
 def get_llama_model_name(model_arg):
-    """Map model argument to actual Hugging Face model name"""
+    """Map model argument to actual Hugging Face model name or use directly if in HF format"""
+    
+    # If model_arg contains "/" it's likely a HuggingFace model ID - use directly
+    if "/" in model_arg:
+        print(f"Using HuggingFace model directly: {model_arg}")
+        return model_arg
+    
+    # Otherwise, use predefined mappings
     llama_models = {
         "llama": "meta-llama/Llama-2-7b-hf",
         "llama-2": "meta-llama/Llama-2-7b-hf",
         "llama2": "meta-llama/Llama-2-7b-hf",
         "llama-3": "meta-llama/Llama-3.1-8B",
         "llama3": "meta-llama/Llama-3.1-8B",
-        "meta-llama/Llama-3.1-8B": "meta-llama/Llama-3.1-8B",
-        "meta-llama/Llama-2-7b": "meta-llama/Llama-2-7b-hf",
-        "meta-llama/Llama-2-13b": "meta-llama/Llama-2-13b-hf",
-        "meta-llama/Llama-2-70b": "meta-llama/Llama-2-70b-hf",
         # DeepSeek reasoning models
         "deepseek-r1": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-        "deepseek-r1-7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-        "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+        "deepseek-r1-7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
     }
     return llama_models.get(model_arg, "meta-llama/Llama-2-7b-hf")
 
@@ -163,7 +169,7 @@ def run_inference(args):
                         max_new_tokens=20,  # Smaller for warmup
                         num_return_sequences=1,
                         pad_token_id=tokenizer.pad_token_id,
-                        do_sample=True,
+                        do_sample=False,
                         temperature=0.6,
                         top_p=0.95
                     )
@@ -214,8 +220,7 @@ def run_inference(args):
                         num_return_sequences=1,
                         pad_token_id=tokenizer.pad_token_id,
                         do_sample=True,
-                        temperature=0.6,
-                        top_p=0.95
+                        top_p=0.95,
                     )
                 else:
                     # Standard LLaMA generation
@@ -317,7 +322,7 @@ def main():
     """Main function"""
     parser = argparse.ArgumentParser(description="PyTorch LLAMA Text Generation Inference Benchmark")
     parser.add_argument("--model", type=str, default="meta-llama/Llama-2-7b",
-                       help="Model name (llama, llama-2, llama-3, meta-llama/Llama-3.1-8B, deepseek-r1, etc.)")
+                       help="Model name (llama, deepseek-r1) or HuggingFace model ID (e.g., microsoft/DialoGPT-medium, Qwen/Qwen2.5-7B-Instruct)")
     parser.add_argument("--precision", type=str, default="fp32",
                        choices=["fp32", "fp16", "mixed"],
                        help="Precision for inference")
