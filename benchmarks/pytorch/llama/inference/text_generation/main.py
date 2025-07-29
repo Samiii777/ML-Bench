@@ -55,7 +55,6 @@ def get_llama_model_name(model_arg):
     
     # Otherwise, use predefined mappings
     llama_models = {
-        "llama2-7b": "meta-llama/Llama-2-7b-hf",
         "llama3.1-8b": "meta-llama/Llama-3.1-8B",
         "llama3.2": "meta-llama/Llama-3.2-3B-Instruct",  # Default to 3B model
         "llama-3.2-1b": "meta-llama/Llama-3.2-1B-Instruct",
@@ -66,7 +65,10 @@ def get_llama_model_name(model_arg):
         "deepseek": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
         "deepseek-r1": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
         "deepseek-r1-7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
-        "deepseek-r1-1.5b": "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B"
+        "deepseek-r1-1.5b": "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B",
+        "deepseek-r1-8b": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+        "deepseek-r1-14b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+        "deepseek-r1-32b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
     }
     return llama_models.get(model_arg, "meta-llama/Llama-3.1-8B")
 
@@ -313,7 +315,7 @@ def main():
     """Main function"""
     parser = argparse.ArgumentParser(description="PyTorch LLAMA Text Generation Inference Benchmark")
     parser.add_argument("--model", type=str, default="meta-llama/Llama-3.2-1B-Instruct",
-                       help="Model name (llama2-7b, llama3.1-8b, llama3.2, llama3.2-1b, llama3.2-3b, deepseek, deepseek-r1-1.5b) or HuggingFace model ID (e.g., microsoft/DialoGPT-medium, Qwen/Qwen2.5-7B-Instruct)")
+                       help="Model name (llama3.1-8b, llama3.2, llama3.2-1b, llama3.2-3b, deepseek, deepseek-r1-1.5b, deepseek-r1-8b, deepseek-r1-14b, deepseek-r1-32b) or HuggingFace model ID")
     parser.add_argument("--precision", type=str, default="fp16",
                        choices=["fp32", "fp16", "mixed"],
                        help="Precision for inference")
