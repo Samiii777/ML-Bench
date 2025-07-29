@@ -99,11 +99,23 @@ def compare_results(df1, df2, file1_name, file2_name, name1="baseline", name2="c
                    baseline_cols=None, comparison_cols=None, custom_col_names=None):
     """Compare results between two dataframes with custom names and column mappings"""
     
-    # Identify key columns for matching
-    key_columns = identify_key_columns(df1)
+    # Use specific key columns for matching as requested by user
+    required_key_columns = ['framework', 'model', 'mode', 'usecase', 'precision', 'batch_size', 'status']
+    key_columns = []
+    
+    # Check which of the required columns exist in both dataframes
+    for col in required_key_columns:
+        if col in df1.columns and col in df2.columns:
+            key_columns.append(col)
+        else:
+            print(f"Warning: Column '{col}' not found in both files. Skipping from matching criteria.")
+    
     if not key_columns:
-        print("Warning: Could not identify key columns for matching. Using all non-numeric columns.")
-        key_columns = [col for col in df1.columns if df1[col].dtype == 'object']
+        print("Error: None of the required key columns found in both files.")
+        print(f"Required columns: {required_key_columns}")
+        print(f"File 1 columns: {list(df1.columns)}")
+        print(f"File 2 columns: {list(df2.columns)}")
+        return
     
     print(f"Matching on columns: {', '.join(key_columns)}")
     
@@ -228,22 +240,108 @@ def compare_results(df1, df2, file1_name, file2_name, name1="baseline", name2="c
     
     # Filter to rows that have data in both datasets
     subset_cols = available_name1_cols + available_name2_cols
-    matched_rows = merged.dropna(subset=subset_cols, how='any')
+    
+    # Instead of requiring ALL metrics to be present, just require at least one metric pair
+    # Create a mask for rows that have at least one valid comparison
+    valid_rows_mask = pd.Series([False] * len(merged), index=merged.index)
+    
+    for i, perf_col in enumerate(available_perf_columns):
+        name1_col = available_name1_cols[i]
+        name2_col = available_name2_cols[i]
+        
+        # Mark rows as valid if they have both values for this metric
+        pair_valid = merged[name1_col].notna() & merged[name2_col].notna()
+        valid_rows_mask |= pair_valid
+    
+    matched_rows = merged[valid_rows_mask]
+    
+    print(f"Debug: Total rows after merge: {len(merged)}")
+    print(f"Debug: Rows with at least one comparable metric: {len(matched_rows)}")
+    
+    # Always save a comparison file, even if no matches
+    if column_mappings:
+        output_file = f"comparison_{name1}_vs_{name2}_custom_columns_{Path(file1_name).stem}_{Path(file2_name).stem}.csv"
+    else:
+        output_file = f"comparison_{name1}_vs_{name2}_{Path(file1_name).stem}_{Path(file2_name).stem}.csv"
     
     if len(matched_rows) == 0:
-        print("No matching test configurations found between the two files.")
-        print("\nSample from merged data:")
-        # Only show columns that actually exist
+        print("⚠️  No matching test configurations found between the two files.")
+        print("\n📊 DIAGNOSTIC INFORMATION:")
+        
+        # Show sample from merged data
+        print("\nSample configurations from merged data:")
         display_cols = [col for col in key_columns + available_perf_columns[:3] if col in merged.columns]
         if display_cols:
-            print(merged[display_cols].head())
+            print(merged[display_cols].head(10))
         else:
             print("No comparable columns found")
         
-        print(f"\nAvailable columns in merged data: {list(merged.columns)}")
+        # Analyze why no matches were found
+        print(f"\n🔍 ANALYSIS:")
+        print(f"Total rows after merge: {len(merged)}")
+        
+        # Check which key columns have mismatches
+        only_in_dataset1 = merged[merged[available_name2_cols].isna().all(axis=1) & 
+                                 merged[available_name1_cols].notna().any(axis=1)]
+        only_in_dataset2 = merged[merged[available_name1_cols].isna().all(axis=1) & 
+                                 merged[available_name2_cols].notna().any(axis=1)]
+        
+        print(f"Configurations only in {name1}: {len(only_in_dataset1)}")
+        print(f"Configurations only in {name2}: {len(only_in_dataset2)}")
+        
+        # Show unique values for key columns
+        for col in key_columns[:3]:  # Show first 3 key columns
+            if col in merged.columns:
+                unique_vals = merged[col].dropna().unique()
+                if len(unique_vals) <= 10:
+                    print(f"{col}: {list(unique_vals)}")
+                else:
+                    print(f"{col}: {len(unique_vals)} unique values (too many to display)")
+        
+        # Create a summary dataframe for saving
+        summary_data = []
+        
+        if len(only_in_dataset1) > 0:
+            for _, row in only_in_dataset1.head(20).iterrows():  # Limit to 20 rows
+                result = {'dataset': name1}
+                for col in key_columns:
+                    if col in row and pd.notna(row[col]):
+                        result[col] = row[col]
+                for perf_col in available_perf_columns[:5]:  # Limit to 5 perf columns
+                    name1_col = perf_col + suffix1
+                    if name1_col in row and pd.notna(row[name1_col]):
+                        result[f"{perf_col}_{name1}"] = row[name1_col]
+                summary_data.append(result)
+        
+        if len(only_in_dataset2) > 0:
+            for _, row in only_in_dataset2.head(20).iterrows():  # Limit to 20 rows
+                result = {'dataset': name2}
+                for col in key_columns:
+                    if col in row and pd.notna(row[col]):
+                        result[col] = row[col]
+                for perf_col in available_perf_columns[:5]:  # Limit to 5 perf columns
+                    name2_col = perf_col + suffix2
+                    if name2_col in row and pd.notna(row[name2_col]):
+                        result[f"{perf_col}_{name2}"] = row[name2_col]
+                summary_data.append(result)
+        
+        if summary_data:
+            results_df = pd.DataFrame(summary_data)
+            results_df.to_csv(output_file, index=False)
+            print(f"\n💾 Summary of non-matching configurations saved to: {output_file}")
+        else:
+            # Save the merged data as-is for inspection
+            merged.to_csv(output_file, index=False)
+            print(f"\n💾 Raw merged data saved for inspection to: {output_file}")
+        
+        print(f"\n💡 SUGGESTIONS:")
+        print(f"1. Check if the files have different model names, batch sizes, or other key identifiers")
+        print(f"2. Use specific column mapping if column names differ between files")
+        print(f"3. Verify that both files contain the same type of benchmark data")
+        
         return
     
-    print(f"\nFound {len(matched_rows)} matching test configurations")
+    print(f"\n✅ Found {len(matched_rows)} matching test configurations")
     
     # Calculate percentage changes
     comparison_results = []
@@ -263,11 +361,14 @@ def compare_results(df1, df2, file1_name, file2_name, name1="baseline", name2="c
             if name1_col in row and name2_col in row:
                 name1_val = row[name1_col]
                 name2_val = row[name2_col]
-                pct_change = calculate_percentage_change(name1_val, name2_val)
                 
-                result[f"{perf_col}_{name1}"] = name1_val
-                result[f"{perf_col}_{name2}"] = name2_val
-                result[f"{perf_col}_change%"] = pct_change
+                # Only calculate percentage if both values are not null/NaN
+                if pd.notna(name1_val) and pd.notna(name2_val):
+                    pct_change = calculate_percentage_change(name1_val, name2_val)
+                    
+                    result[f"{perf_col}_{name1}"] = name1_val
+                    result[f"{perf_col}_{name2}"] = name2_val
+                    result[f"{perf_col}_change%"] = pct_change
         
         comparison_results.append(result)
     
@@ -291,7 +392,7 @@ def compare_results(df1, df2, file1_name, file2_name, name1="baseline", name2="c
     
     for col in change_columns:
         metric_name = col.replace('_change%', '')
-        changes = results_df[col].dropna()
+        changes = results_df[col].dropna()  # Drop NaN values for statistics
         if len(changes) > 0:
             avg_change = changes.mean()
             significant_improvements = (changes > 5).sum()
@@ -299,7 +400,10 @@ def compare_results(df1, df2, file1_name, file2_name, name1="baseline", name2="c
             
             print(f"{metric_name:25} | Avg: {avg_change:+6.1f}% | "
                   f"Improvements: {significant_improvements} | "
-                  f"Regressions: {significant_regressions}")
+                  f"Regressions: {significant_regressions} | "
+                  f"Valid comparisons: {len(changes)}")
+        else:
+            print(f"{metric_name:25} | No valid comparisons found")
     
     # Show detailed results
     print(f"\nDETAILED COMPARISON:")
@@ -327,7 +431,9 @@ def compare_results(df1, df2, file1_name, file2_name, name1="baseline", name2="c
                 name2_val = row.get(name2_col, 'N/A')
                 pct_change = row[col]
                 
-                print(f"  {metric_name:20} | {name1_val:>10} → {name2_val:>10} | {format_percentage(pct_change)}")
+                # Only show metrics that have valid data
+                if pd.notna(name1_val) and pd.notna(name2_val):
+                    print(f"  {metric_name:20} | {name1_val:>10} → {name2_val:>10} | {format_percentage(pct_change)}")
     
     # Show configurations that only exist in one dataset
     only_in_dataset1 = merged[merged[available_name2_cols].isna().all(axis=1) & 
@@ -347,13 +453,9 @@ def compare_results(df1, df2, file1_name, file2_name, name1="baseline", name2="c
             config_parts = [f"{col}={row[col]}" for col in key_columns if pd.notna(row[col])]
             print(f"  {' | '.join(config_parts)}")
     
-    # Save detailed results to CSV with custom names
-    if column_mappings:
-        output_file = f"comparison_{name1}_vs_{name2}_custom_columns_{Path(file1_name).stem}_{Path(file2_name).stem}.csv"
-    else:
-        output_file = f"comparison_{name1}_vs_{name2}_{Path(file1_name).stem}_{Path(file2_name).stem}.csv"
+    # Save detailed results to CSV
     results_df.to_csv(output_file, index=False)
-    print(f"\nDetailed results saved to: {output_file}")
+    print(f"\n💾 Detailed results saved to: {output_file}")
 
 def main():
     parser = argparse.ArgumentParser(description="Compare benchmark results between two CSV files")
