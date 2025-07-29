@@ -50,7 +50,7 @@ MODEL_FAMILIES = {
     'deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B': 'llama',
     'deepseek-ai/DeepSeek-R1-Distill-Llama-8B': 'llama',
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B': 'llama',
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B': 'llama',
+    'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': 'llama',
 }
 
 # Available models per framework
@@ -66,8 +66,8 @@ PYTORCH_MODELS = [
     "meta-llama/Llama-3.1-8B",
     "meta-llama/Llama-3.2-1B-Instruct", "meta-llama/Llama-3.2-3B-Instruct",
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B",
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B", 
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B", "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
 ]
 ONNX_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
@@ -157,7 +157,7 @@ VRAM_REQUIREMENTS = {
     'deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B': {'fp32': 3.0, 'fp16': 1.5},  # 1.5B parameters
     'deepseek-ai/DeepSeek-R1-Distill-Llama-8B': {'fp32': 16.0, 'fp16': 8.0},   # 8B parameters  
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-14B': {'fp32': 28.0, 'fp16': 14.0},  # 14B parameters
-    'deepseek-ai/DeepSeek-R1-Distill-Qwen-32B': {'fp32': '>24GB', 'fp16': '>24GB'},  # 32B parameters
+    'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': {'fp32': 16.0, 'fp16': 8.0},     # 8B parameters
 }
 
 def get_model_family(model_name):
@@ -213,7 +213,7 @@ def get_unique_models(framework="pytorch"):
             "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B",
             "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
             "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
+            "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
         ]
     elif framework == "onnx":
         return [
