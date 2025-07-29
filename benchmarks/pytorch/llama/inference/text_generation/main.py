@@ -67,7 +67,6 @@ def get_llama_model_name(model_arg):
         "deepseek-r1-7b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
         "deepseek-r1-1.5b": "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B",
         "deepseek-r1-8b": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-        "deepseek-r1-14b": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
         "deepseek-r1-0528-8b": "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
     }
     return llama_models.get(model_arg, "meta-llama/Llama-3.1-8B")
