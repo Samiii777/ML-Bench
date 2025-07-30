@@ -36,6 +36,14 @@ MODEL_FAMILIES = {
     'stable_diffusion_3_5_large_turbo': 'stable_diffusion',
     'sd3.5_turbo': 'stable_diffusion',
     'sd35_turbo': 'stable_diffusion',
+    'flux_1_schnell': 'flux',
+    'flux1_schnell': 'flux',
+    'flux_schnell': 'flux',
+    'flux.1-schnell': 'flux',
+    'flux_1_dev': 'flux',
+    'flux1_dev': 'flux',
+    'flux_dev': 'flux',
+    'flux.1-dev': 'flux',
     'gpu_ops': 'gpu_ops',
     'gemm_ops': 'gpu_ops',
     'conv_ops': 'gpu_ops',
@@ -64,6 +72,8 @@ PYTORCH_MODELS = [
     "stable_diffusion_1_5", "sd1.5", "sd15",
     "stable_diffusion_3_medium", "sd3_medium", "sd3",
     "stable_diffusion_3_5_large_turbo", "sd3.5_turbo", "sd35_turbo",
+    "flux_1_schnell", "flux1_schnell", "flux_schnell", "flux.1-schnell",
+    "flux_1_dev", "flux1_dev", "flux_dev", "flux.1-dev",
     "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",
     "llama", "llama-3", "llama3",
     "meta-llama/Llama-3.1-8B",
@@ -164,6 +174,16 @@ VRAM_REQUIREMENTS = {
     'deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B': {'fp32': 3.0, 'fp16': 1.5},  # 1.5B parameters
     'deepseek-ai/DeepSeek-R1-Distill-Llama-8B': {'fp32': 16.0, 'fp16': 8.0},   # 8B parameters  
     'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': {'fp32': 16.0, 'fp16': 8.0},     # 8B parameters
+    # FLUX Schnell - 12B params, optimized for 1-4 step inference (very fast)
+    'flux_1_schnell': {'fp32': 48.0, 'fp16': 24.0, 'mixed': 33.0},
+    'flux1_schnell': {'fp32': 48.0, 'fp16': 24.0, 'mixed': 33.0},
+    'flux_schnell': {'fp32': 48.0, 'fp16': 24.0, 'mixed': 33.0},
+    'flux.1-schnell': {'fp32': 48.0, 'fp16': 24.0, 'mixed': 33.0},
+    # FLUX Dev - 12B params, full model requiring more steps and guidance (higher quality)
+    'flux_1_dev': {'fp32': 50.0, 'fp16': 26.0, 'mixed': 35.0},
+    'flux1_dev': {'fp32': 50.0, 'fp16': 26.0, 'mixed': 35.0},
+    'flux_dev': {'fp32': 50.0, 'fp16': 26.0, 'mixed': 35.0},
+    'flux.1-dev': {'fp32': 50.0, 'fp16': 26.0, 'mixed': 35.0},
 }
 
 def get_model_family(model_name):
@@ -193,6 +213,8 @@ def get_model_family(model_name):
             return 'yolo'
         elif any(pattern in model_lower for pattern in ['inception']):
             return 'inception'
+        elif any(pattern in model_lower for pattern in ['flux']):
+            return 'flux'
         else:
             # Default to LLaMA family for unknown text generation models
             print(f"Unknown model family for '{model_name}', defaulting to 'llama'")
@@ -211,6 +233,7 @@ def get_unique_models(framework="pytorch"):
             "yolov5s", "yolov5m", "yolov5l", "yolov5x",  # YOLOv5 variants
             "bert-base-uncased", "bert-large-uncased",  # BERT models
             "stable_diffusion_1_5", "stable_diffusion_3_medium", "stable_diffusion_3_5_large_turbo",  # Stable Diffusion models
+            "flux_1_schnell", "flux_1_dev",  # FLUX models
             "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",  # GPU operations benchmark
             "meta-llama/Llama-3.1-8B",  # Latest LLaMA model
             "meta-llama/Llama-3.2-1B-Instruct",  # LLaMA 3.2 models
@@ -283,6 +306,8 @@ def get_default_use_case_for_model(model_name):
         return "compute"
     elif model_family == "llama":
         return "text_generation"
+    elif model_family == "flux":
+        return "generation" # FLUX Schnell is a generation model
     else:
         return "classification"  # Default fallback
 
@@ -304,6 +329,8 @@ def get_available_frameworks_for_model(model_name):
         return ["pytorch"]  # Only PyTorch for GPU ops
     elif model_family == "llama":
         return ["pytorch"]  # Only PyTorch for llama
+    elif model_family == "flux":
+        return ["pytorch"] # Only PyTorch for FLUX Schnell
     else:
         return ["pytorch"]  # Default to PyTorch only
 
@@ -328,6 +355,8 @@ def get_models_for_use_case(use_case, framework="pytorch"):
             compatible_models.append(model)
         elif use_case == "text_classification" and model_family == "bert":
             compatible_models.append(model)
+        elif use_case == "generation" and model_family == "flux":
+            compatible_models.append(model)
     
     return compatible_models
 
@@ -347,6 +376,8 @@ def get_available_frameworks_for_use_case(use_case):
         return ["pytorch"]  # Only PyTorch for text generation
     elif use_case == "text_classification":
         return ["pytorch", "onnx"]  # Both frameworks support BERT
+    elif use_case == "generation":
+        return ["pytorch"] # Only PyTorch supports FLUX Schnell
     else:
         return ["pytorch"]  # Default to PyTorch only
 

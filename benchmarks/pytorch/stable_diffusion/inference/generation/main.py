@@ -115,6 +115,18 @@ def get_model_configs():
             'type': 'sd3_turbo',
             'model_id': 'stabilityai/stable-diffusion-3.5-large-turbo',
             'display_name': 'Stable Diffusion 3.5 Large Turbo'
+        },
+        {
+            'name': 'flux_1_schnell',
+            'type': 'flux_schnell',
+            'model_id': 'black-forest-labs/FLUX.1-schnell',
+            'display_name': 'FLUX.1 Schnell'
+        },
+        {
+            'name': 'flux_1_dev',
+            'type': 'flux_dev',
+            'model_id': 'black-forest-labs/FLUX.1-dev',
+            'display_name': 'FLUX.1 Dev'
         }
     ]
 
@@ -315,10 +327,60 @@ def load_sd3_turbo_pipeline(model_id, precision, device, cpu_offload=False):
     
     return pipeline
 
+def load_flux_pipeline(model_id, precision, device, cpu_offload=False):
+    """Load FLUX Schnell pipeline"""
+    from diffusers import FluxPipeline
+    
+    if precision == "fp16":
+        pipeline = FluxPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    elif precision == "mixed":
+        pipeline = FluxPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.bfloat16,  # FLUX works best with bfloat16
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    else:  # fp32
+        pipeline = FluxPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float32,
+            device_map="balanced" if device.type == "cuda" else None
+        )
+    
+    # Move to device if not using device_map
+    if device.type == "cuda":
+        try:
+            pipeline = pipeline.to(device)
+        except ValueError as e:
+            if "device mapping strategy" in str(e):
+                print("Using device mapping strategy, skipping manual device placement")
+            else:
+                raise e
+    
+    # Enable optimizations for FLUX Schnell
+    try:
+        if hasattr(pipeline, 'enable_xformers_memory_efficient_attention'):
+            pipeline.enable_xformers_memory_efficient_attention()
+            print("Enabled xformers memory efficient attention")
+    except Exception as e:
+        print(f"Note: Could not enable memory efficient attention: {e}")
+    
+    try:
+        if hasattr(pipeline, 'enable_model_cpu_offload') and cpu_offload:
+            pipeline.enable_model_cpu_offload()
+            print("Enabled model CPU offload")
+    except Exception as e:
+        print(f"Note: Could not enable model CPU offload: {e}")
+    
+    return pipeline
+
 def get_default_image_size(model_type):
     """Get default image size based on model type"""
-    if model_type in ['sd3', 'sd3_turbo']:
-        # SD3 and above work best at 1024x1024
+    if model_type in ['sd3', 'sd3_turbo', 'flux_schnell', 'flux_dev']:
+        # SD3, SD3.5 Turbo, and FLUX work best at 1024x1024
         return 1024, 1024
     else:
         # SD1.5 works best at 512x512
@@ -329,6 +391,12 @@ def get_default_inference_steps(model_type):
     if model_type == 'sd3_turbo':
         # SD3.5 Turbo is optimized for 4-step inference
         return 4
+    elif model_type == 'flux_schnell':
+        # FLUX Schnell is optimized for 4-step inference
+        return 4
+    elif model_type == 'flux_dev':
+        # FLUX Dev requires more steps for higher quality
+        return 20
     elif model_type == 'sd3':
         # SD3 Medium works well with 28 steps
         return 28
@@ -355,8 +423,10 @@ def run_single_model_benchmark(model_config, params):
         print(f"Guidance scale: {params.guidance_scale}")
     elif model_type == 'sd3_turbo':
         print(f"Guidance scale: 1.0 (optimized for turbo)")
-    elif model_type == 'sd3_turbo':
-        print(f"Guidance scale: 1.0 (optimized for turbo)")
+    elif model_type == 'flux_schnell':
+        print(f"Guidance scale: 0.0 (no guidance for FLUX Schnell)")
+    elif model_type == 'flux_dev':
+        print(f"Guidance scale: {params.guidance_scale} (guidance enabled for FLUX Dev)")
     
     device = get_device()
     
@@ -372,6 +442,10 @@ def run_single_model_benchmark(model_config, params):
         pipeline = load_sd3_pipeline(model_id, params.precision, device, params.cpu_offload)
     elif model_type == 'sd3_turbo':
         pipeline = load_sd3_turbo_pipeline(model_id, params.precision, device, params.cpu_offload)
+    elif model_type == 'flux_schnell':
+        pipeline = load_flux_pipeline(model_id, params.precision, device, params.cpu_offload)
+    elif model_type == 'flux_dev':
+        pipeline = load_flux_pipeline(model_id, params.precision, device, params.cpu_offload)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
     
@@ -395,7 +469,7 @@ def run_single_model_benchmark(model_config, params):
                         height=params.height,
                         width=params.width,
                         num_inference_steps=10,  # Fewer steps for warmup
-                        guidance_scale=params.guidance_scale if model_type == 'sd3' else (1.0 if model_type == 'sd3_turbo' else 7.5),
+                        guidance_scale=params.guidance_scale if model_type == 'sd3' else (1.0 if model_type == 'sd3_turbo' else (0.0 if model_type == 'flux_schnell' else (params.guidance_scale if model_type == 'flux_dev' else 7.5))),
                         num_images_per_prompt=1
                     ).images
             else:
@@ -412,6 +486,10 @@ def run_single_model_benchmark(model_config, params):
                     generation_kwargs['guidance_scale'] = params.guidance_scale
                 elif model_type == 'sd3_turbo':
                     generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
+                elif model_type == 'flux_schnell':
+                    generation_kwargs['guidance_scale'] = 0.0  # No guidance for FLUX Schnell
+                elif model_type == 'flux_dev':
+                    generation_kwargs['guidance_scale'] = params.guidance_scale  # Full guidance for FLUX Dev
                 else:
                     generation_kwargs['guidance_scale'] = 7.5
                 
@@ -450,6 +528,8 @@ def run_single_model_benchmark(model_config, params):
                         generation_kwargs['guidance_scale'] = params.guidance_scale
                     elif model_type == 'sd3_turbo':
                         generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
+                    elif model_type == 'flux_schnell':
+                        generation_kwargs['guidance_scale'] = 0.0  # No guidance for FLUX Schnell
                     else:
                         generation_kwargs['guidance_scale'] = 7.5
                     
@@ -468,6 +548,10 @@ def run_single_model_benchmark(model_config, params):
                     generation_kwargs['guidance_scale'] = params.guidance_scale
                 elif model_type == 'sd3_turbo':
                     generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
+                elif model_type == 'flux_schnell':
+                    generation_kwargs['guidance_scale'] = 0.0  # No guidance for FLUX Schnell
+                elif model_type == 'flux_dev':
+                    generation_kwargs['guidance_scale'] = params.guidance_scale  # Full guidance for FLUX Dev
                 else:
                     generation_kwargs['guidance_scale'] = 7.5
                 
@@ -607,7 +691,15 @@ def run_inference(params):
             'sd3': 'stable_diffusion_3_medium',
             'stable_diffusion_3_5_large_turbo': 'stable_diffusion_3_5_large_turbo',
             'sd3.5_turbo': 'stable_diffusion_3_5_large_turbo',
-            'sd35_turbo': 'stable_diffusion_3_5_large_turbo'
+            'sd35_turbo': 'stable_diffusion_3_5_large_turbo',
+            'flux_1_schnell': 'flux_1_schnell',
+            'flux1_schnell': 'flux_1_schnell',
+            'flux_schnell': 'flux_1_schnell',
+            'flux.1-schnell': 'flux_1_schnell',
+            'flux_1_dev': 'flux_1_dev',
+            'flux1_dev': 'flux_1_dev',
+            'flux_dev': 'flux_1_dev',
+            'flux.1-dev': 'flux_1_dev'
         }
         
         target_model = model_name_mapping.get(params.model.lower())
@@ -682,7 +774,9 @@ def main():
     parser.add_argument('--model', type=str, default=None,
                         choices=['stable_diffusion_1_5', 'sd1.5', 'sd15', 
                                 'stable_diffusion_3_medium', 'sd3_medium', 'sd3',
-                                'stable_diffusion_3_5_large_turbo', 'sd3.5_turbo', 'sd35_turbo'],
+                                'stable_diffusion_3_5_large_turbo', 'sd3.5_turbo', 'sd35_turbo',
+                                'flux_1_schnell', 'flux1_schnell', 'flux_schnell', 'flux.1-schnell',
+                            'flux_1_dev', 'flux1_dev', 'flux_dev', 'flux.1-dev'],
                         help='Specific model to benchmark (default: run all models)')
     
     # Precision settings

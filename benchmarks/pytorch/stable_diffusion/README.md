@@ -1,10 +1,10 @@
 # Stable Diffusion Benchmark
 
-This benchmark provides a **unified interface** for testing **Stable Diffusion 1.5**, **Stable Diffusion 3 Medium**, and **Stable Diffusion 3.5 Large Turbo** models. When run, it automatically benchmarks the specified models with optimized settings and provides comprehensive performance comparisons.
+This benchmark provides a **unified interface** for testing **Stable Diffusion 1.5**, **Stable Diffusion 3 Medium**, **Stable Diffusion 3.5 Large Turbo**, and **FLUX.1 Schnell** models. When run, it automatically benchmarks the specified models with optimized settings and provides comprehensive performance comparisons.
 
 ## Key Features
 
-- **Multi-Model Support**: SD1.5, SD3 Medium, and SD3.5 Large Turbo
+- **Multi-Model Support**: SD1.5, SD3 Medium, SD3.5 Turbo, and FLUX Schnell
 - **Automatic Optimization**: Model-specific image sizes and inference steps
 - **Multiple Precisions**: fp32, fp16, and mixed precision support
 - **Memory Optimization**: Automatic memory management and CPU offload options
@@ -43,6 +43,12 @@ It automatically executes this script and benchmarks the Stable Diffusion models
 - **Default settings**: 1024x1024, 4 inference steps (optimized for speed)
 - **Memory requirements**: ~10GB VRAM (fp16), ~16GB (fp32)
 
+### FLUX.1 Schnell
+- **Model aliases**: `flux_schnell`, `flux_1_schnell`, `flux1_schnell`
+- **Hugging Face ID**: `black-forest-labs/FLUX.1-schnell`
+- **Default settings**: 1024x1024, 4 inference steps, guidance_scale=0.0
+- **Memory requirements**: ~24GB VRAM (fp16), ~48GB (fp32)
+
 ## Automatic Model Optimization
 
 The benchmark automatically applies optimal settings for each model:
@@ -50,6 +56,7 @@ The benchmark automatically applies optimal settings for each model:
 - **SD1.5**: 512x512 resolution, 20 inference steps
 - **SD3 Medium**: 1024x1024 resolution, 28 inference steps  
 - **SD3.5 Turbo**: 1024x1024 resolution, 4 inference steps
+- **FLUX Schnell**: 1024x1024 resolution, 4 inference steps, no guidance
 
 These defaults can be overridden using command-line arguments.
 
@@ -67,8 +74,10 @@ Example structure:
 benchmark_results/images/
 ├── stable_diffusion_1_5_fp16_bs1_20250729_231842/
 │   └── sd15_fp16_bs1_20250729_231842_1.png
-└── stable_diffusion_3_5_large_turbo_fp16_bs1_20250729_231808/
-    └── sd3_turbo_fp16_bs1_20250729_231808_1.png
+├── stable_diffusion_3_5_large_turbo_fp16_bs1_20250729_231808/
+│   └── sd3_turbo_fp16_bs1_20250729_231808_1.png
+└── flux_1_schnell_fp16_bs1_20250729_232100/
+    └── flux_schnell_fp16_bs1_20250729_232100_1.png
 ```
 
 Images are excluded from version control via `.gitignore` to keep the repository clean.
@@ -79,9 +88,9 @@ Images are excluded from version control via `.gitignore` to keep the repository
 
 ```bash
 # Run specific model with optimal settings
-python benchmark.py --framework pytorch --model sd35_turbo --precision fp16
+python benchmark.py --framework pytorch --model flux_schnell --precision fp16
 
-# Run all stable diffusion models
+# Run all generation models
 python benchmark.py --use_case generation --precision fp16
 
 # Run comprehensive benchmarks
@@ -92,19 +101,19 @@ python benchmark.py --use_case generation --comprehensive
 
 ```bash
 # Run specific model with optimal settings
-python benchmarks/pytorch/stable_diffusion/inference/generation/main.py --model sd35_turbo
+python benchmarks/pytorch/stable_diffusion/inference/generation/main.py --model flux_schnell
 
 # Run all models (default behavior)
 python benchmarks/pytorch/stable_diffusion/inference/generation/main.py
 
 # Custom configuration (overrides optimized defaults)
 python benchmarks/pytorch/stable_diffusion/inference/generation/main.py \
-    --model sd3 \
+    --model flux_schnell \
     --precision fp16 \
     --batch_size 1 \
     --height 768 \
     --width 768 \
-    --num-inference-steps 15
+    --num-inference-steps 8
 ```
 
 ## Command Line Arguments
@@ -117,7 +126,7 @@ python benchmarks/pytorch/stable_diffusion/inference/generation/main.py \
 | `--height` | int | Auto | Image height (512 for SD1.5, 1024 for SD3+) |
 | `--width` | int | Auto | Image width (512 for SD1.5, 1024 for SD3+) |
 | `--num-inference-steps` | int | Auto | Inference steps (20/28/4 based on model) |
-| `--guidance-scale` | float | `4.5` | Guidance scale (SD3: 4.5, Turbo: 1.0) |
+| `--guidance-scale` | float | `4.5` | Guidance scale (SD3: 4.5, Turbo: 1.0, FLUX: 0.0) |
 | `--num-runs` | int | `5` | Number of benchmark runs |
 | `--cpu-offload` | flag | `False` | Enable CPU offload for SD3+ |
 | `--save-images` | flag | `False` | Legacy flag (images always saved) |
@@ -133,6 +142,7 @@ Typical performance on RTX 4090 (fp16 precision):
 | SD1.5 | 512x512 | 20 | ~1.3 samples/sec | ~4GB |
 | SD3 Medium | 1024x1024 | 28 | ~0.2 samples/sec | ~18GB |
 | SD3.5 Turbo | 1024x1024 | 4 | ~0.5 samples/sec | ~10GB |
+| FLUX Schnell | 1024x1024 | 4 | ~0.3 samples/sec | ~24GB |
 
 ## Example Output
 
