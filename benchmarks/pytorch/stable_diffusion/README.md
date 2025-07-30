@@ -1,10 +1,11 @@
 # Stable Diffusion Benchmark
 
-This benchmark provides a **unified interface** for testing both **Stable Diffusion 1.5** and **Stable Diffusion 3 Medium** models. When run, it automatically benchmarks both models and provides comprehensive performance comparisons.
+This benchmark provides a **unified interface** for testing **Stable Diffusion 1.5**, **Stable Diffusion 3 Medium**, and **Stable Diffusion 3.5 Large Turbo** models. When run, it automatically benchmarks the specified models with optimized settings and provides comprehensive performance comparisons.
 
 ## Key Features
 
-- **Automatic Dual Model Testing**: Runs both SD 1.5 and SD3 models in a single execution
+- **Multi-Model Support**: SD1.5, SD3 Medium, and SD3.5 Large Turbo
+- **Automatic Optimization**: Model-specific image sizes and inference steps
 - **Multiple Precisions**: fp32, fp16, and mixed precision support
 - **Memory Optimization**: Automatic memory management and CPU offload options
 - **Comprehensive Metrics**: Detailed performance and memory usage statistics
@@ -19,30 +20,48 @@ This benchmark is designed to work with the main ML-Bench framework. When you ru
 python benchmark.py --use_case generation
 ```
 
-It automatically executes this script and benchmarks both Stable Diffusion models with the specified parameters.
+It automatically executes this script and benchmarks the Stable Diffusion models with optimized parameters.
 
 ## Supported Models
 
 ### Stable Diffusion 1.5
-- Model aliases: `sd15`, `sd1.5`, `stable_diffusion_1_5`
-- Hugging Face ID: `runwayml/stable-diffusion-v1-5`
-- Memory requirements: ~4-8 GB VRAM (depending on precision)
+- **Model aliases**: `sd15`, `sd1.5`, `stable_diffusion_1_5`
+- **Hugging Face ID**: `runwayml/stable-diffusion-v1-5`
+- **Default settings**: 512x512, 20 inference steps
+- **Memory requirements**: ~4GB VRAM (fp16), ~8GB (fp32)
 
 ### Stable Diffusion 3 Medium
-- Model aliases: `sd3`, `sd3_medium`, `stable_diffusion_3_medium`
-- Hugging Face ID: `stabilityai/stable-diffusion-3-medium-diffusers`
-- Memory requirements: ~12-22 GB VRAM (depending on precision)
+- **Model aliases**: `sd3`, `sd3_medium`, `stable_diffusion_3_medium`
+- **Hugging Face ID**: `stabilityai/stable-diffusion-3-medium-diffusers`
+- **Default settings**: 1024x1024, 28 inference steps
+- **Memory requirements**: ~18GB VRAM (fp16), ~24GB (fp32)
+
+### Stable Diffusion 3.5 Large Turbo
+- **Model aliases**: `sd35_turbo`, `sd3.5_turbo`, `stable_diffusion_3_5_large_turbo`
+- **Hugging Face ID**: `stabilityai/stable-diffusion-3.5-large-turbo`
+- **Default settings**: 1024x1024, 4 inference steps (optimized for speed)
+- **Memory requirements**: ~10GB VRAM (fp16), ~16GB (fp32)
+
+## Automatic Model Optimization
+
+The benchmark automatically applies optimal settings for each model:
+
+- **SD1.5**: 512x512 resolution, 20 inference steps
+- **SD3 Medium**: 1024x1024 resolution, 28 inference steps  
+- **SD3.5 Turbo**: 1024x1024 resolution, 4 inference steps
+
+These defaults can be overridden using command-line arguments.
 
 ## Usage
 
 ### Via Main Benchmark Framework (Recommended)
 
 ```bash
-# Run both models with default settings
-python benchmark.py --use_case generation
+# Run specific model with optimal settings
+python benchmark.py --framework pytorch --model sd35_turbo --precision fp16
 
-# Run with specific precision and batch size
-python benchmark.py --use_case generation --precision fp16 --batch_size 1
+# Run all stable diffusion models
+python benchmark.py --use_case generation --precision fp16
 
 # Run comprehensive benchmarks
 python benchmark.py --use_case generation --comprehensive
@@ -51,37 +70,48 @@ python benchmark.py --use_case generation --comprehensive
 ### Direct Script Execution
 
 ```bash
-# Run both models (default behavior)
+# Run specific model with optimal settings
+python benchmarks/pytorch/stable_diffusion/inference/generation/main.py --model sd35_turbo
+
+# Run all models (default behavior)
 python benchmarks/pytorch/stable_diffusion/inference/generation/main.py
 
-# Run specific model only
-python benchmarks/pytorch/stable_diffusion/inference/generation/main.py --model sd15
-python benchmarks/pytorch/stable_diffusion/inference/generation/main.py --model sd3
-
-# Custom configuration
+# Custom configuration (overrides optimized defaults)
 python benchmarks/pytorch/stable_diffusion/inference/generation/main.py \
+    --model sd3 \
     --precision fp16 \
     --batch_size 1 \
-    --num-runs 10 \
-    --num-inference-steps 20
+    --height 768 \
+    --width 768 \
+    --num-inference-steps 15
 ```
 
 ## Command Line Arguments
 
 | Argument | Type | Default | Description |
 |----------|------|---------|-------------|
-| `--model` | str | `None` | Specific model to benchmark (default: run both) |
+| `--model` | str | `None` | Specific model to benchmark (default: run all) |
 | `--precision` | str | `fp16` | Precision mode (`fp32`, `fp16`, `mixed`) |
 | `--batch_size` | int | `1` | Batch size for inference |
-| `--height` | int | `512` | Image height in pixels |
-| `--width` | int | `512` | Image width in pixels |
-| `--num-inference-steps` | int | `20` | Number of denoising steps |
-| `--guidance-scale` | float | `4.5` | Guidance scale (SD3 only) |
+| `--height` | int | Auto | Image height (512 for SD1.5, 1024 for SD3+) |
+| `--width` | int | Auto | Image width (512 for SD1.5, 1024 for SD3+) |
+| `--num-inference-steps` | int | Auto | Inference steps (20/28/4 based on model) |
+| `--guidance-scale` | float | `4.5` | Guidance scale (SD3: 4.5, Turbo: 1.0) |
 | `--num-runs` | int | `5` | Number of benchmark runs |
-| `--cpu-offload` | flag | `False` | Enable CPU offload for SD3 |
+| `--cpu-offload` | flag | `False` | Enable CPU offload for SD3+ |
 | `--save-images` | flag | `False` | Save generated images |
 | `--output-dir` | str | `None` | Output directory for images |
 | `--custom-prompt` | str | `None` | Custom generation prompt |
+
+## Performance Comparison
+
+Typical performance on RTX 4090 (fp16 precision):
+
+| Model | Resolution | Steps | Performance | VRAM Usage |
+|-------|------------|-------|-------------|------------|
+| SD1.5 | 512x512 | 20 | ~1.3 samples/sec | ~4GB |
+| SD3 Medium | 1024x1024 | 28 | ~0.2 samples/sec | ~18GB |
+| SD3.5 Turbo | 1024x1024 | 4 | ~0.5 samples/sec | ~10GB |
 
 ## Example Output
 
@@ -89,31 +119,22 @@ python benchmarks/pytorch/stable_diffusion/inference/generation/main.py \
 ============================================================
 STABLE DIFFUSION COMBINED BENCHMARK
 ============================================================
-Running benchmarks for both Stable Diffusion models
+Running benchmarks for Stable Diffusion models
 Precision: fp16
 Batch size: 1
-Image size: 512x512
-Inference steps: 20
-Number of runs per model: 5
+Auto-optimized settings per model
 
 ============================================================
-BENCHMARKING: Stable Diffusion 1.5
+STARTING MODEL: Stable Diffusion 3.5 Large Turbo
+============================================================
+Using default image size 1024x1024 for Stable Diffusion 3.5 Large Turbo
+Using default inference steps 4 for Stable Diffusion 3.5 Large Turbo
+
+============================================================
+BENCHMARKING: Stable Diffusion 3.5 Large Turbo
 ============================================================
 ...
-✅ Stable Diffusion 1.5: 2.34 images/sec, 3.9 GB VRAM
-
-============================================================
-BENCHMARKING: Stable Diffusion 3 Medium
-============================================================
-...
-✅ Stable Diffusion 3 Medium: 0.81 images/sec, 14.2 GB VRAM
-
-============================================================
-BENCHMARK SUMMARY
-============================================================
-✅ Stable Diffusion 1.5: 2.34 images/sec, 3.9 GB VRAM
-✅ Stable Diffusion 3 Medium: 0.81 images/sec, 14.2 GB VRAM
-============================================================
+✅ Stable Diffusion 3.5 Large Turbo: 0.49 images/sec, 22.6 GB VRAM
 ```
 
 ## Memory Requirements

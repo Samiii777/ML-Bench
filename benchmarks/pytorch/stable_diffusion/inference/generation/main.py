@@ -299,6 +299,27 @@ def load_sd3_turbo_pipeline(model_id, precision, device, cpu_offload=False):
     
     return pipeline
 
+def get_default_image_size(model_type):
+    """Get default image size based on model type"""
+    if model_type in ['sd3', 'sd3_turbo']:
+        # SD3 and above work best at 1024x1024
+        return 1024, 1024
+    else:
+        # SD1.5 works best at 512x512
+        return 512, 512
+
+def get_default_inference_steps(model_type):
+    """Get default inference steps based on model type"""
+    if model_type == 'sd3_turbo':
+        # SD3.5 Turbo is optimized for 4-step inference
+        return 4
+    elif model_type == 'sd3':
+        # SD3 Medium works well with 28 steps
+        return 28
+    else:
+        # SD1.5 works well with 20-50 steps
+        return 20
+
 def run_single_model_benchmark(model_config, params):
     """Run benchmark for a single model"""
     model_type = model_config['type']
@@ -582,7 +603,23 @@ def run_inference(params):
             print(f"STARTING MODEL {i+1}/{len(model_configs)}: {model_config['display_name']}")
             print(f"{'='*60}")
             
-            result = run_single_model_benchmark(model_config, params)
+            # Create a copy of params for this model to avoid modifying the original
+            import copy
+            model_params = copy.copy(params)
+            
+            # Set model-specific image size if using defaults (512x512)
+            if params.height == 512 and params.width == 512:
+                height, width = get_default_image_size(model_config['type'])
+                model_params.height = height
+                model_params.width = width
+                print(f"Using default image size {height}x{width} for {model_config['display_name']}")
+            
+            # Set model-specific inference steps if using defaults (20)
+            if params.num_inference_steps == 20:
+                model_params.num_inference_steps = get_default_inference_steps(model_config['type'])
+                print(f"Using default inference steps {model_params.num_inference_steps} for {model_config['display_name']}")
+            
+            result = run_single_model_benchmark(model_config, model_params)
             all_results.append(result)
             
         except Exception as e:
@@ -635,11 +672,11 @@ def main():
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size for inference (default: 1)')
     parser.add_argument('--height', type=int, default=512,
-                        help='Image height (default: 512)')
+                        help='Image height (default: 512 for SD1.5, 1024 for SD3+)')
     parser.add_argument('--width', type=int, default=512,
-                        help='Image width (default: 512)')
+                        help='Image width (default: 512 for SD1.5, 1024 for SD3+)')
     parser.add_argument('--num-inference-steps', type=int, default=20,
-                        help='Number of inference steps (default: 20)')
+                        help='Number of inference steps (default: 20 for SD1.5, 28 for SD3, 4 for SD3.5 Turbo)')
     parser.add_argument('--guidance-scale', type=float, default=4.5,
                         help='Guidance scale for SD3 (default: 4.5)')
     
