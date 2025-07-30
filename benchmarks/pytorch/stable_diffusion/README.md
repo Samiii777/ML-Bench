@@ -10,6 +10,7 @@ This benchmark provides a **unified interface** for testing **Stable Diffusion 1
 - **Memory Optimization**: Automatic memory management and CPU offload options
 - **Comprehensive Metrics**: Detailed performance and memory usage statistics
 - **Framework Integration**: Seamlessly integrates with the main ML-Bench framework
+- **Automatic Image Saving**: Generated images automatically saved to `benchmark_results/images/`
 - **Flexible Configuration**: Customizable batch sizes, image dimensions, and inference steps
 
 ## Integration with ML-Bench
@@ -51,6 +52,26 @@ The benchmark automatically applies optimal settings for each model:
 - **SD3.5 Turbo**: 1024x1024 resolution, 4 inference steps
 
 These defaults can be overridden using command-line arguments.
+
+## Automatic Image Saving
+
+All generated images are automatically saved to preserve visual outputs for analysis:
+
+- **Location**: `benchmark_results/images/`
+- **Structure**: `{model_name}_{precision}_bs{batch_size}_{timestamp}/`
+- **Format**: PNG files with descriptive names
+- **Timestamped**: Each run creates a unique directory to avoid conflicts
+
+Example structure:
+```
+benchmark_results/images/
+├── stable_diffusion_1_5_fp16_bs1_20250729_231842/
+│   └── sd15_fp16_bs1_20250729_231842_1.png
+└── stable_diffusion_3_5_large_turbo_fp16_bs1_20250729_231808/
+    └── sd3_turbo_fp16_bs1_20250729_231808_1.png
+```
+
+Images are excluded from version control via `.gitignore` to keep the repository clean.
 
 ## Usage
 
@@ -99,8 +120,8 @@ python benchmarks/pytorch/stable_diffusion/inference/generation/main.py \
 | `--guidance-scale` | float | `4.5` | Guidance scale (SD3: 4.5, Turbo: 1.0) |
 | `--num-runs` | int | `5` | Number of benchmark runs |
 | `--cpu-offload` | flag | `False` | Enable CPU offload for SD3+ |
-| `--save-images` | flag | `False` | Save generated images |
-| `--output-dir` | str | `None` | Output directory for images |
+| `--save-images` | flag | `False` | Legacy flag (images always saved) |
+| `--output-dir` | str | `None` | Legacy option (auto-saved to benchmark_results) |
 | `--custom-prompt` | str | `None` | Custom generation prompt |
 
 ## Performance Comparison

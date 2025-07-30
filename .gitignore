@@ -42,6 +42,14 @@ results/
 logs/
 *.log
 
+# Generated images from benchmarks
+benchmark_results/images/
+benchmark_results/**/*.png
+benchmark_results/**/*.jpg
+benchmark_results/**/*.jpeg
+benchmark_results/**/*.gif
+benchmark_results/**/*.bmp
+
 # Jupyter Notebook
 .ipynb_checkpoints
 

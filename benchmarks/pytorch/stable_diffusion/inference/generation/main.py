@@ -149,6 +149,22 @@ def save_images(images, output_dir, prefix="generated"):
     
     return saved_paths
 
+def get_benchmark_images_dir():
+    """Get the benchmark results images directory"""
+    # Get the project root directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = script_dir
+    
+    # Navigate up to find the project root (where benchmark.py is located)
+    for _ in range(10):  # Safety limit
+        if os.path.exists(os.path.join(project_root, 'benchmark.py')):
+            break
+        project_root = os.path.dirname(project_root)
+    
+    # Create benchmark_results/images directory
+    images_dir = os.path.join(project_root, "benchmark_results", "images")
+    return images_dir
+
 def load_sd15_pipeline(model_id, precision, device):
     """Load Stable Diffusion 1.5 pipeline"""
     from diffusers import StableDiffusionPipeline
@@ -520,10 +536,16 @@ def run_single_model_benchmark(model_config, params):
         print(f"Total GPU Memory Used: {final_memory['total_gpu_used_gb']:.2f} GB")
     print(f"# End Parseable Output for {display_name}")
     
-    # Save images if requested
-    if params.save_images and all_images:
+    # Always save images to benchmark_results for analysis
+    if all_images:
         print(f"\nSaving {len(all_images)} generated images...")
-        output_dir = params.output_dir or f"output_{model_type}_{params.precision}"
+        
+        # Create timestamped directory in benchmark_results/images
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        base_images_dir = get_benchmark_images_dir()
+        run_dir = f"{model_config['name']}_{params.precision}_bs{params.batch_size}_{timestamp}"
+        output_dir = os.path.join(base_images_dir, run_dir)
+        
         prefix = f"{model_type}_{params.precision}_bs{params.batch_size}"
         saved_paths = save_images(all_images, output_dir, prefix)
         print(f"Images saved to: {output_dir}")
@@ -688,11 +710,11 @@ def main():
     parser.add_argument('--cpu-offload', action='store_true',
                         help='Enable CPU offload for SD3 (saves GPU memory)')
     
-    # Output settings
+    # Output settings (images are automatically saved to benchmark_results/images/)
     parser.add_argument('--save-images', action='store_true',
-                        help='Save generated images to disk')
+                        help='Legacy flag - images are now automatically saved to benchmark_results/images/')
     parser.add_argument('--output-dir', type=str, default=None,
-                        help='Output directory for images (default: auto-generated)')
+                        help='Legacy option - images are automatically saved to benchmark_results/images/')
     parser.add_argument('--custom-prompt', type=str, default=None,
                         help='Custom prompt for generation (default: use test prompt)')
     
