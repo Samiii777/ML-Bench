@@ -561,7 +561,10 @@ def run_inference(params):
             'sd15': 'stable_diffusion_1_5',
             'stable_diffusion_3_medium': 'stable_diffusion_3_medium',
             'sd3_medium': 'stable_diffusion_3_medium',
-            'sd3': 'stable_diffusion_3_medium'
+            'sd3': 'stable_diffusion_3_medium',
+            'stable_diffusion_3_5_large_turbo': 'stable_diffusion_3_5_large_turbo',
+            'sd3.5_turbo': 'stable_diffusion_3_5_large_turbo',
+            'sd35_turbo': 'stable_diffusion_3_5_large_turbo'
         }
         
         target_model = model_name_mapping.get(params.model.lower())
@@ -619,8 +622,9 @@ def main():
     # Model selection (optional - if not specified, runs both models)
     parser.add_argument('--model', type=str, default=None,
                         choices=['stable_diffusion_1_5', 'sd1.5', 'sd15', 
-                                'stable_diffusion_3_medium', 'sd3_medium', 'sd3'],
-                        help='Specific model to benchmark (default: run both models)')
+                                'stable_diffusion_3_medium', 'sd3_medium', 'sd3',
+                                'stable_diffusion_3_5_large_turbo', 'sd3.5_turbo', 'sd35_turbo'],
+                        help='Specific model to benchmark (default: run all models)')
     
     # Precision settings
     parser.add_argument('--precision', type=str, default='fp16',
