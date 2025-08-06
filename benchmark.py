@@ -637,6 +637,9 @@ class BenchmarkRunner:
             elif args.model == "gpu_ops":
                 # Expand gpu_ops to all GPU operation models
                 models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
+            elif args.model == "flux":
+                # Expand flux to all FLUX models
+                models = ["flux_1_schnell", "flux_1_dev"]
             else:
                 models = [args.model]
         elif args.usecase:
@@ -1060,6 +1063,9 @@ class BenchmarkRunner:
         elif model == "gpu_ops":
             # Expand gpu_ops to all GPU operation models
             models = ["gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops"]
+        elif model == "flux":
+            # Expand flux to all FLUX models
+            models = ["flux_1_schnell", "flux_1_dev"]
         else:
             models = [model]
         
