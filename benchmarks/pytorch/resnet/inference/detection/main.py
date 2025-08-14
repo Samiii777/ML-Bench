@@ -201,11 +201,16 @@ def run_inference(params):
     # Apply precision settings
     use_mixed_precision = False
     if params.precision == "fp16":
-        if device.type == "cuda":
+        if device.type == "cuda" or device.type == "mps":
+            model = model.half()
+            input_batch = [img.half() for img in input_batch]
+        elif device.type == "cpu":
+            print("Warning: FP16 on CPU may be slower than FP32, but proceeding as requested...")
             model = model.half()
             input_batch = [img.half() for img in input_batch]
         else:
-            print("Warning: FP16 not supported on CPU, using FP32")
+            model = model.half()
+            input_batch = [img.half() for img in input_batch]
     elif params.precision == "mixed":
         if device.type == "cuda":
             use_mixed_precision = True

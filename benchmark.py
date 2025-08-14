@@ -609,8 +609,9 @@ class BenchmarkRunner:
                     for precision in precisions:
                         for batch_size in batch_sizes_for_use_case:
                             for execution_provider in execution_providers:
-                                # Skip FP16 on CPU
-                                if precision == "fp16" and not torch.cuda.is_available():
+                                # Skip FP16 on CPU (allow on CUDA or MPS)
+                                has_gpu = torch.cuda.is_available() or (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available())
+                                if precision == "fp16" and not has_gpu:
                                     continue
                                 # Skip FP16 for CPU execution provider in ONNX
                                 if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
@@ -722,8 +723,9 @@ class BenchmarkRunner:
                 for precision in precisions:
                     for batch_size in batch_sizes_for_use_case:
                         for execution_provider in execution_providers:
-                            # Skip FP16 on CPU
-                            if precision == "fp16" and not torch.cuda.is_available():
+                            # Skip FP16 on CPU (allow on CUDA or MPS)
+                            has_gpu = torch.cuda.is_available() or (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available())
+                            if precision == "fp16" and not has_gpu:
                                 continue
                             
                             # Skip FP16 for CPU execution provider in ONNX
