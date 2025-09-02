@@ -27,6 +27,28 @@ class BenchmarkRunner:
     def __init__(self):
         self.logger = BenchmarkLogger()
         self.results = BenchmarkResults()
+
+    def _should_skip_model(self, model: str, skip_models: List[str]) -> bool:
+        """Check if a model should be skipped based on skip list"""
+        if not skip_models:
+            return False
+        
+        # Direct match
+        if model in skip_models:
+            return True
+        
+        # Check for partial matches (e.g., skip "resnet" matches "resnet50")
+        for skip_model in skip_models:
+            if skip_model in model or model.startswith(skip_model):
+                return True
+        
+        return False
+    
+    def _should_skip_usecase(self, use_case: str, skip_usecases: List[str]) -> bool:
+        """Check if a use case should be skipped based on skip list"""
+        if not skip_usecases:
+            return False
+        return use_case in skip_usecases
         
     def get_available_models(self, framework: str, model_prefix: str = None) -> List[str]:
         """Get list of available models for a framework"""
@@ -564,6 +586,10 @@ class BenchmarkRunner:
             
             # Calculate total combinations, accounting for skipped tests
             for model in models:
+                # Check if model should be skipped
+                if self._should_skip_model(model, getattr(args, 'skip_model', None)):
+                    continue
+                
                 # Determine which use cases to test for this model
                 if args.usecase:
                     # If user specified a specific use case, only test that one
@@ -583,6 +609,9 @@ class BenchmarkRunner:
                         use_cases_to_test = [get_default_use_case_for_model(model)]
                 
                 for use_case in use_cases_to_test:
+                    # Check if use case should be skipped
+                    if self._should_skip_usecase(use_case, getattr(args, 'skip_usecase', None)):
+                        continue
                     # Check if this use case is available for this framework and mode
                     if should_skip_use_case_for_mode(use_case, args.mode, framework):
                         continue  # Skip this use case for this framework/mode combination
@@ -678,6 +707,11 @@ class BenchmarkRunner:
         current_test = start_test_num
         
         for model in models:
+            # Check if model should be skipped
+            if self._should_skip_model(model, getattr(args, 'skip_model', None)):
+                print(f"Skipping model: {model}")
+                continue
+            
             # Determine which use cases to test for this model
             if args.usecase:
                 # If user specified a specific use case, only test that one
@@ -697,6 +731,10 @@ class BenchmarkRunner:
                     use_cases_to_test = [get_default_use_case_for_model(model)]
             
             for use_case in use_cases_to_test:
+                # Check if use case should be skipped
+                if self._should_skip_usecase(use_case, getattr(args, 'skip_usecase', None)):
+                    print(f"Skipping use case: {use_case} for model: {model}")
+                    continue
                 # Check if this use case is available for this framework and mode
                 if should_skip_use_case_for_mode(use_case, args.mode, framework):
                     continue  # Skip this use case for this framework/mode combination
@@ -1087,6 +1125,16 @@ class BenchmarkRunner:
         all_results = []
         
         for model_name in models:
+            # Check if model should be skipped
+            if self._should_skip_model(model_name, getattr(args, 'skip_model', None)):
+                print(f"Skipping model: {model_name}")
+                continue
+            
+            # Check if use case should be skipped
+            if self._should_skip_usecase(args.usecase, getattr(args, 'skip_usecase', None)):
+                print(f"Skipping use case: {args.usecase} for model: {model_name}")
+                continue
+            
             for execution_provider in execution_providers:
                 current_test += 1
                 
@@ -1282,6 +1330,11 @@ def main():
                        help="Visualization mode: dashboard (interactive web), cli (terminal), or static (HTML report)")
     parser.add_argument("--viz-port", type=int, default=8501,
                        help="Port for visualization dashboard (default: 8501)")
+    parser.add_argument("--skip-model", type=str, nargs='*',
+                       help="Model names to skip during benchmarking (e.g., --skip-model resnet50 stable_diffusion)")
+    parser.add_argument("--skip-usecase", type=str, nargs='*',
+                       choices=["classification", "detection", "segmentation", "generation", "compute", "text_generation", "text_classification"],
+                       help="Use cases to skip during benchmarking (e.g., --skip-usecase generation compute)")
     
     args = parser.parse_args()
     
