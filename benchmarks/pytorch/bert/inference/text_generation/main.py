@@ -89,7 +89,12 @@ def get_sample_texts():
 def run_inference(args):
     """Run BERT text classification inference benchmark"""
     
-    device = get_device()
+    # Set device
+    if args.device == 'auto':
+        device = get_device()
+    else:
+        device = torch.device(args.device)
+    
     model_name = get_bert_model_name(args.model)
     
     print(f"Running BERT Text Classification Benchmark")
@@ -295,6 +300,8 @@ def main():
                        help="Precision for inference")
     parser.add_argument("--batch_size", type=int, default=1,
                        help="Batch size for inference")
+    parser.add_argument('--device', type=str, default='auto',
+                       help='Device to use (auto, cpu, cuda, mps)')
     
     args = parser.parse_args()
     

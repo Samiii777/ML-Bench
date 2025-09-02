@@ -74,7 +74,12 @@ def get_llama_model_name(model_arg):
 def run_inference(args):
     """Run LLAMA text generation inference benchmark"""
     
-    device = get_device()
+    # Set device
+    if args.device == 'auto':
+        device = get_device()
+    else:
+        device = torch.device(args.device)
+    
     model_name = get_llama_model_name(args.model)
     
     print(f"Running LLAMA Text Generation Benchmark")
@@ -320,6 +325,8 @@ def main():
                        help="Precision for inference")
     parser.add_argument("--batch_size", type=int, default=1,
                        help="Batch size for inference")
+    parser.add_argument('--device', type=str, default='auto',
+                       help='Device to use (auto, cpu, cuda, mps)')
     
     args = parser.parse_args()
     
