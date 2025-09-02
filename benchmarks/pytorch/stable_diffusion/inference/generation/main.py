@@ -404,7 +404,7 @@ def get_default_inference_steps(model_type):
         # SD1.5 works well with 20-50 steps
         return 20
 
-def run_single_model_benchmark(model_config, params):
+def run_single_model_benchmark(model_config, params, device=None):
     """Run benchmark for a single model"""
     model_type = model_config['type']
     model_id = model_config['model_id']
@@ -428,7 +428,8 @@ def run_single_model_benchmark(model_config, params):
     elif model_type == 'flux_dev':
         print(f"Guidance scale: {params.guidance_scale} (guidance enabled for FLUX Dev)")
     
-    device = get_device()
+    if device is None:
+        device = get_device()
     
     # Measure initial memory usage
     initial_memory = get_gpu_memory_nvidia_smi()
@@ -671,8 +672,12 @@ def run_inference(params):
     print(f"Inference steps: {params.num_inference_steps}")
     print(f"Number of runs per model: {params.num_runs}")
     
-    # Get device and print info
-    device = get_device()
+    # Set device
+    if params.device == 'auto':
+        device = get_device()
+    else:
+        device = torch.device(params.device)
+    
     print_device_info()
     print(f"Using device: {device}")
     
@@ -733,7 +738,7 @@ def run_inference(params):
                 model_params.num_inference_steps = get_default_inference_steps(model_config['type'])
                 print(f"Using default inference steps {model_params.num_inference_steps} for {model_config['display_name']}")
             
-            result = run_single_model_benchmark(model_config, model_params)
+            result = run_single_model_benchmark(model_config, model_params, device)
             all_results.append(result)
             
         except Exception as e:
@@ -811,6 +816,8 @@ def main():
                         help='Legacy option - images are automatically saved to benchmark_results/images/')
     parser.add_argument('--custom-prompt', type=str, default=None,
                         help='Custom prompt for generation (default: use test prompt)')
+    parser.add_argument('--device', type=str, default='auto',
+                        help='Device to use (auto, cpu, cuda, mps)')
     
     args = parser.parse_args()
     

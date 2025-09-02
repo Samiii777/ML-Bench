@@ -169,8 +169,12 @@ def run_inference(params):
     # Load and preprocess input image
     input_batch = preprocess_image(image_file, params.batch_size)
     
-    # Move to device
-    device = get_device()
+    # Set device
+    if params.device == 'auto':
+        device = get_device()
+    else:
+        device = torch.device(params.device)
+    
     print_device_info()
     print(f"Using device: {device}")
     
@@ -322,6 +326,8 @@ def main():
                        help='Number of warmup iterations')
     parser.add_argument('--num_runs', type=int, default=100,
                        help='Number of benchmark iterations')
+    parser.add_argument('--device', type=str, default='auto',
+                       help='Device to use (auto, cpu, cuda, mps)')
     
     args = parser.parse_args()
     

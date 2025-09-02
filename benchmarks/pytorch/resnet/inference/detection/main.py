@@ -181,8 +181,12 @@ def run_inference(params):
     
     print(f"Loading object detection model with {params.model} backbone")
     
-    # Move to device
-    device = get_device()
+    # Set device
+    if params.device == 'auto':
+        device = get_device()
+    else:
+        device = torch.device(params.device)
+    
     print_device_info()
     print(f"Using device: {device}")
     
@@ -327,6 +331,8 @@ def main():
                        help="Precision for inference")
     parser.add_argument("--batch_size", type=int, default=1,
                        help="Batch size for inference")
+    parser.add_argument('--device', type=str, default='auto',
+                       help='Device to use (auto, cpu, cuda, mps)')
     
     args = parser.parse_args()
     

@@ -92,7 +92,7 @@ class BenchmarkRunner:
         return str(script_path)
     
     def run_single_benchmark(self, framework: str, model: str, mode: str, use_case: str, 
-                           precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch", epochs: int = 3, timeout_minutes: int = 5) -> Dict[str, Any]:
+                           precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch", epochs: int = 3, timeout_minutes: int = 5, device: str = "auto") -> Dict[str, Any]:
         """Run a single benchmark and return results"""
         script_path = self.get_benchmark_script_path(framework, model, mode, use_case)
         
@@ -134,6 +134,10 @@ class BenchmarkRunner:
             "--precision", precision,
             "--batch_size", str(batch_size),
         ]
+
+        # Add device argument if not auto
+        if device != "auto":
+            cmd.extend(["--device", device])
 
         # Only add training_mode for training mode, not inference
         if mode == "training":
@@ -784,7 +788,8 @@ class BenchmarkRunner:
                                 precision, batch_size, execution_provider,
                                 getattr(args, 'training_mode', 'scratch'),
                                 getattr(args, 'epochs', 3),
-                                getattr(args, 'timeout', 5)
+                                getattr(args, 'timeout', 5),
+                                getattr(args, 'device', 'auto')
                             )
                             
                             # Add metadata to result
@@ -1150,7 +1155,8 @@ class BenchmarkRunner:
                     precision, batch_size, execution_provider,
                     getattr(args, 'training_mode', 'scratch'),
                     getattr(args, 'epochs', 3),
-                    getattr(args, 'timeout', 5)
+                    getattr(args, 'timeout', 5),
+                    getattr(args, 'device', 'auto')
                 )
                 
                 # Add metadata to result
@@ -1335,6 +1341,9 @@ def main():
     parser.add_argument("--skip-usecase", type=str, nargs='*',
                        choices=["classification", "detection", "segmentation", "generation", "compute", "text_generation", "text_classification"],
                        help="Use cases to skip during benchmarking (e.g., --skip-usecase generation compute)")
+    parser.add_argument("--device", type=str, default="auto",
+                       choices=["auto", "cpu", "cuda", "mps"],
+                       help="Device to use for benchmarking (auto: auto-detect best device, cpu: force CPU, cuda: force CUDA, mps: force MPS for Apple Silicon)")
     
     args = parser.parse_args()
     
