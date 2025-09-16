@@ -308,6 +308,9 @@ def main():
                        help='Number of warmup iterations')
     parser.add_argument('--num_runs', type=int, default=100,
                        help='Number of benchmark iterations')
+    parser.add_argument('--device', type=str, default='auto',
+                       choices=['auto', 'cpu', 'cuda', 'mps'],
+                       help='Device to use for inference')
     
     args = parser.parse_args()
     

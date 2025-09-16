@@ -302,6 +302,9 @@ def main():
                        help="Precision for inference")
     parser.add_argument("--batch_size", type=int, default=1,
                        help="Batch size for inference")
+    parser.add_argument("--device", type=str, default="auto",
+                       choices=["auto", "cpu", "cuda", "mps"],
+                       help="Device to use for inference")
     
     args = parser.parse_args()
     
