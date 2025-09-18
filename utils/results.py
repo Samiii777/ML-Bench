@@ -159,7 +159,7 @@ class BenchmarkResults:
             if header == "Test Name":
                 width_limit = 13
             elif header in ["Model", "Model Name"]:
-                width_limit = 25  # Allow longer model names
+                width_limit = 35  # Allow even longer model names for LLMs
             elif header == "UseCase":
                 width_limit = 15  # Allow full use case names
             elif header == "Performance":
