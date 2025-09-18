@@ -409,8 +409,26 @@ class BenchmarkResults:
             console = Console()
             table = Table(show_header=True, header_style="bold magenta")
             
+            # Add columns with specific widths for better readability
             for header in headers:
-                table.add_column(header)
+                if header == "Test Name":
+                    table.add_column(header, min_width=10, max_width=14)
+                elif header in ["Model", "Model Name"]:
+                    table.add_column(header, min_width=18, max_width=30)  # Ensure full model names show
+                elif header == "Framework":
+                    table.add_column(header, min_width=8, max_width=9)
+                elif header == "Performance":
+                    table.add_column(header, min_width=12, max_width=15)
+                elif header == "UseCase":
+                    table.add_column(header, min_width=10, max_width=14)
+                elif header == "Mode":
+                    table.add_column(header, min_width=6, max_width=8)
+                elif header == "Precision":
+                    table.add_column(header, min_width=6, max_width=8)
+                elif header == "Batch Size":
+                    table.add_column(header, min_width=6, max_width=8)
+                else:
+                    table.add_column(header)
             
             for row in table_data:
                 table.add_row(*row)
