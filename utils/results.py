@@ -147,14 +147,29 @@ class BenchmarkResults:
     
     def _print_simple_table(self, headers: List[str], table_data: List[List[str]]) -> None:
         """Print a simple ASCII table when rich is not available"""
-        # Calculate column widths
+        # Calculate column widths with specific limits per column type
         col_widths = []
         for i, header in enumerate(headers):
             max_width = len(header)
             for row in table_data:
                 if i < len(row):
                     max_width = max(max_width, len(str(row[i])))
-            col_widths.append(min(max_width + 2, 15))  # Cap at 15 chars
+            
+            # Set appropriate width limits based on column type
+            if header == "Test Name":
+                width_limit = 13
+            elif header in ["Model", "Model Name"]:
+                width_limit = 25  # Allow longer model names
+            elif header == "UseCase":
+                width_limit = 15  # Allow full use case names
+            elif header == "Performance":
+                width_limit = 15  # Allow full performance metrics
+            elif header in ["Framework", "Mode", "Precision", "Batch Size", "Device"]:
+                width_limit = 10
+            else:
+                width_limit = 12
+            
+            col_widths.append(min(max_width + 2, width_limit))
         
         # Print header
         header_row = "| "
