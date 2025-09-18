@@ -161,7 +161,7 @@ class BenchmarkResults:
             elif header in ["Model", "Model Name"]:
                 width_limit = 35  # Allow even longer model names for LLMs
             elif header == "UseCase":
-                width_limit = 15  # Allow full use case names
+                width_limit = 18  # Allow full use case names like "text_generation"
             elif header == "Performance":
                 width_limit = 15  # Allow full performance metrics
             elif header in ["Framework", "Mode", "Precision", "Batch Size", "Device"]:
