@@ -331,27 +331,33 @@ def load_flux_pipeline(model_id, precision, device, cpu_offload=False):
     """Load FLUX Schnell pipeline"""
     from diffusers import FluxPipeline
     
+    # Choose device mapping strategy based on cpu_offload setting
+    if cpu_offload and device.type == "cuda":
+        device_map = None  # Don't use device_map when using CPU offloading
+    else:
+        device_map = "balanced" if device.type == "cuda" else None
+    
     if precision == "fp16":
         pipeline = FluxPipeline.from_pretrained(
             model_id,
             torch_dtype=torch.float16,
-            device_map="balanced" if device.type == "cuda" else None
+            device_map=device_map
         )
     elif precision == "mixed":
         pipeline = FluxPipeline.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,  # FLUX works best with bfloat16
-            device_map="balanced" if device.type == "cuda" else None
+            device_map=device_map
         )
     else:  # fp32
         pipeline = FluxPipeline.from_pretrained(
             model_id,
             torch_dtype=torch.float32,
-            device_map="balanced" if device.type == "cuda" else None
+            device_map=device_map
         )
     
-    # Move to device if not using device_map
-    if device.type == "cuda":
+    # Move to device only if not using device_map and not using CPU offload
+    if device.type == "cuda" and device_map is None and not cpu_offload:
         try:
             pipeline = pipeline.to(device)
         except ValueError as e:
@@ -368,12 +374,18 @@ def load_flux_pipeline(model_id, precision, device, cpu_offload=False):
     except Exception as e:
         print(f"Note: Could not enable memory efficient attention: {e}")
     
-    try:
-        if hasattr(pipeline, 'enable_model_cpu_offload') and cpu_offload:
-            pipeline.enable_model_cpu_offload()
-            print("Enabled model CPU offload")
-    except Exception as e:
-        print(f"Note: Could not enable model CPU offload: {e}")
+    # Enable CPU offloading if requested
+    if cpu_offload:
+        try:
+            # Use sequential CPU offload for better memory management with FLUX
+            if hasattr(pipeline, 'enable_sequential_cpu_offload'):
+                pipeline.enable_sequential_cpu_offload()
+                print("Enabled sequential CPU offload for FLUX")
+            elif hasattr(pipeline, 'enable_model_cpu_offload'):
+                pipeline.enable_model_cpu_offload()
+                print("Enabled model CPU offload for FLUX")
+        except Exception as e:
+            print(f"Note: Could not enable CPU offload: {e}")
     
     return pipeline
 

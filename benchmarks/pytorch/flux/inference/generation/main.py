@@ -73,6 +73,10 @@ try:
         parser.add_argument('--cpu-offload', action='store_true',
                             help='Enable CPU offload for FLUX (saves GPU memory)')
         
+        # Device settings
+        parser.add_argument('--device', type=str, default='auto',
+                            help='Device to use for inference (cuda, cpu, or auto)')
+        
         # Output settings (images are automatically saved to benchmark_results/images/)
         parser.add_argument('--save-images', action='store_true',
                             help='Legacy flag - images are now automatically saved to benchmark_results/images/')
