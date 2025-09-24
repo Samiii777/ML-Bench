@@ -62,6 +62,9 @@ MODEL_FAMILIES = {
     'deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B': 'llama',
     'deepseek-ai/DeepSeek-R1-Distill-Llama-8B': 'llama',
     'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': 'llama',
+    # Ollama models
+    'llama3.1:8b': 'ollama',
+    'qwen2.5:7b': 'ollama',
 }
 
 # Available models per framework
@@ -82,6 +85,10 @@ PYTORCH_MODELS = [
     "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B",
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
     "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+]
+OLLAMA_MODELS = [
+    "llama3.1:8b",
+    "qwen2.5:7b",
 ]
 ONNX_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
@@ -116,7 +123,7 @@ def _get_available_onnx_execution_providers():
 ONNX_EXECUTION_PROVIDERS = _get_available_onnx_execution_providers()
 
 # Default settings
-DEFAULT_FRAMEWORKS = ["pytorch", "onnx"]
+DEFAULT_FRAMEWORKS = ["pytorch", "onnx", "ollama"]
 DEFAULT_PRECISIONS = ["fp32", "fp16", "mixed"]
 DEFAULT_TRAINING_PRECISIONS = ["fp32", "mixed"]  # No pure fp16 for training
 DEFAULT_USE_CASE_PRECISIONS = {
@@ -244,6 +251,11 @@ def get_unique_models(framework="pytorch"):
             "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
             "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
         ]
+    elif framework == "ollama":
+        return [
+            "llama3.1:8b",
+            "qwen2.5:7b"
+        ]
     elif framework == "onnx":
         return [
             "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
@@ -260,6 +272,8 @@ def get_available_models(framework="pytorch"):
         return PYTORCH_MODELS.copy()
     elif framework == "onnx":
         return ONNX_MODELS.copy()
+    elif framework == "ollama":
+        return OLLAMA_MODELS.copy()
     else:
         return PYTORCH_MODELS.copy()  # Default to pytorch
 
@@ -332,6 +346,8 @@ def get_available_frameworks_for_model(model_name):
         return ["pytorch"]  # Only PyTorch for llama
     elif model_family == "flux":
         return ["pytorch"] # Only PyTorch for FLUX Schnell
+    elif model_family == "ollama":
+        return ["ollama"] # Only Ollama for Ollama models
     else:
         return ["pytorch"]  # Default to PyTorch only
 
@@ -374,7 +390,7 @@ def get_available_frameworks_for_use_case(use_case):
     elif use_case == "compute":
         return ["pytorch"]  # Only PyTorch for GPU ops
     elif use_case == "text_generation":
-        return ["pytorch"]  # Only PyTorch for text generation
+        return ["pytorch", "ollama"]  # PyTorch and Ollama for text generation
     elif use_case == "text_classification":
         return ["pytorch", "onnx"]  # Both frameworks support BERT
     elif use_case == "generation":

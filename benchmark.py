@@ -52,7 +52,7 @@ class BenchmarkRunner:
         
     def get_available_models(self, framework: str, model_prefix: str = None) -> List[str]:
         """Get list of available models for a framework"""
-        if framework in ["pytorch", "onnx"]:
+        if framework in ["pytorch", "onnx", "ollama"]:
             available_models = get_available_models(framework)
             if model_prefix == "resnet":
                 return [m for m in available_models if m.startswith("resnet")]
@@ -64,6 +64,13 @@ class BenchmarkRunner:
     
     def get_benchmark_script_path(self, framework: str, model: str, mode: str, use_case: str) -> str:
         """Get the path to the benchmark script"""
+        # Handle Ollama framework differently
+        if framework == "ollama":
+            # Ollama uses a simpler structure: benchmarks/ollama/use_case/main.py
+            base_path = Path("benchmarks") / "ollama" / use_case
+            script_path = base_path / "main.py"
+            return str(script_path)
+        
         # Get the actual directory name (model family)
         directory_name = get_model_family(model)
         
@@ -1297,7 +1304,7 @@ class BenchmarkRunner:
 def main():
     parser = argparse.ArgumentParser(description="ML Model Benchmarking Framework")
     parser.add_argument("--framework", type=str, nargs='*',
-                       choices=["pytorch", "onnx", "tensorflow"],
+                       choices=["pytorch", "onnx", "tensorflow", "ollama"],
                        help="ML framework to benchmark (default: all available)")
     parser.add_argument("--model", type=str, nargs='*',
                        help="Model name (e.g., resnet50, deepseek-r1) or HuggingFace model ID (e.g., microsoft/DialoGPT-medium, deepseek-ai/DeepSeek-R1-Distill-Qwen-7B, default: all available)")
