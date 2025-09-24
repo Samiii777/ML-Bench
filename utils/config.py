@@ -135,6 +135,13 @@ DEFAULT_USE_CASE_PRECISIONS = {
     "text_generation": ["fp16"],  # Skip fp32 for LLMs - slower and uses more memory
     "text_classification": ["fp32", "fp16", "mixed"]
 }
+
+# Framework-specific precision overrides
+FRAMEWORK_PRECISION_OVERRIDES = {
+    "ollama": {
+        "text_generation": ["auto"]  # Ollama handles precision internally
+    }
+}
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64]
 DEFAULT_TRAINING_BATCH_SIZES = {
     "classification": [64],      # Large batch size works for classification
@@ -144,6 +151,13 @@ DEFAULT_TRAINING_BATCH_SIZES = {
     "compute": [64],            # Large for GPU compute operations
     "text_generation": [1],     # Small batch size for text generation
     "text_classification": [32] # Medium batch size for text classification
+}
+
+# Framework-specific batch size overrides
+FRAMEWORK_BATCH_SIZE_OVERRIDES = {
+    "ollama": {
+        "text_generation": [1]  # Ollama handles batching internally, just use 1
+    }
 }
 DEFAULT_FRAMEWORK = "pytorch"
 DEFAULT_MODE = "inference"
@@ -437,12 +451,29 @@ def get_training_batch_sizes_for_use_case(use_case):
     """Get training batch sizes for a specific use case"""
     return DEFAULT_TRAINING_BATCH_SIZES.get(use_case, [32])  # Default fallback
 
-def get_precisions_for_use_case(use_case, mode="inference"):
+def get_precisions_for_use_case(use_case, mode="inference", framework="pytorch"):
     """Get precisions for a specific use case and mode"""
+    # Check for framework-specific overrides first
+    if framework in FRAMEWORK_PRECISION_OVERRIDES:
+        if use_case in FRAMEWORK_PRECISION_OVERRIDES[framework]:
+            return FRAMEWORK_PRECISION_OVERRIDES[framework][use_case]
+    
     if mode == "training":
         return DEFAULT_TRAINING_PRECISIONS
     else:
         return DEFAULT_USE_CASE_PRECISIONS.get(use_case, DEFAULT_PRECISIONS)
+
+def get_batch_sizes_for_use_case(use_case, mode="inference", framework="pytorch"):
+    """Get batch sizes for a specific use case, mode, and framework"""
+    # Check for framework-specific overrides first
+    if framework in FRAMEWORK_BATCH_SIZE_OVERRIDES:
+        if use_case in FRAMEWORK_BATCH_SIZE_OVERRIDES[framework]:
+            return FRAMEWORK_BATCH_SIZE_OVERRIDES[framework][use_case]
+    
+    if mode == "training":
+        return get_training_batch_sizes_for_use_case(use_case)
+    else:
+        return DEFAULT_BATCH_SIZES
 
 def should_skip_use_case_for_mode(use_case, mode, framework):
     """Check if a use case should be skipped for a specific mode and framework"""

@@ -262,8 +262,8 @@ def main():
                         help='Number of benchmark runs per model (default: 3)')
     
     # Framework compatibility arguments (may not be used but needed for integration)
-    parser.add_argument('--precision', type=str, default='fp16',
-                        choices=['fp32', 'fp16', 'mixed'],
+    parser.add_argument('--precision', type=str, default='auto',
+                        choices=['fp32', 'fp16', 'mixed', 'auto'],
                         help='Precision mode (not used by Ollama, for framework compatibility)')
     parser.add_argument('--batch_size', type=int, default=1,
                         help='Batch size (not used by Ollama, for framework compatibility)')

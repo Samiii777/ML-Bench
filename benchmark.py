@@ -18,7 +18,7 @@ import torch
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.logger import BenchmarkLogger
-from utils.config import get_model_family, get_available_models, is_model_available, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case, get_precisions_for_use_case, set_skip_vram_check
+from utils.config import get_model_family, get_available_models, is_model_available, DEFAULT_PRECISIONS, DEFAULT_TRAINING_PRECISIONS, DEFAULT_BATCH_SIZES, DEFAULT_TRAINING_BATCH_SIZES, get_onnx_execution_providers, get_default_frameworks, get_default_use_case_for_model, get_available_frameworks_for_model, get_unique_models, get_models_for_use_case, get_available_frameworks_for_use_case, get_vram_requirement, should_skip_for_vram, get_default_use_cases, should_skip_use_case_for_mode, get_training_batch_sizes_for_use_case, get_precisions_for_use_case, get_batch_sizes_for_use_case, set_skip_vram_check
 from utils.results import BenchmarkResults
 from utils.shared_device_utils import get_gpu_memory_efficient
 from utils.safe_print import safe_print, format_success_message, get_safe_checkmark
@@ -629,7 +629,7 @@ class BenchmarkRunner:
                     
                     # Determine which precisions to test for this use case
                     if args.precision is None:
-                        precisions = get_precisions_for_use_case(use_case, args.mode)
+                        precisions = get_precisions_for_use_case(use_case, args.mode, framework)
                     elif isinstance(args.precision, list):
                         precisions = args.precision
                     else:
@@ -637,10 +637,7 @@ class BenchmarkRunner:
                     
                     # Determine batch sizes for this specific use case
                     if args.batch_size is None:
-                        if args.mode == "training":
-                            batch_sizes_for_use_case = get_training_batch_sizes_for_use_case(use_case)
-                        else:
-                            batch_sizes_for_use_case = DEFAULT_BATCH_SIZES
+                        batch_sizes_for_use_case = get_batch_sizes_for_use_case(use_case, args.mode, framework)
                     elif isinstance(args.batch_size, list):
                         batch_sizes_for_use_case = args.batch_size
                     else:
@@ -752,7 +749,7 @@ class BenchmarkRunner:
                 
                 # Determine which precisions to test for this use case
                 if args.precision is None:
-                    precisions = get_precisions_for_use_case(use_case, args.mode)
+                    precisions = get_precisions_for_use_case(use_case, args.mode, framework)
                 elif isinstance(args.precision, list):
                     precisions = args.precision
                 else:
@@ -760,10 +757,7 @@ class BenchmarkRunner:
                 
                 # Determine batch sizes for this specific use case
                 if args.batch_size is None:
-                    if args.mode == "training":
-                        batch_sizes_for_use_case = get_training_batch_sizes_for_use_case(use_case)
-                    else:
-                        batch_sizes_for_use_case = DEFAULT_BATCH_SIZES
+                    batch_sizes_for_use_case = get_batch_sizes_for_use_case(use_case, args.mode, framework)
                 elif isinstance(args.batch_size, list):
                     batch_sizes_for_use_case = args.batch_size
                 else:
