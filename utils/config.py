@@ -65,6 +65,12 @@ MODEL_FAMILIES = {
     # Ollama models
     'llama3.1:8b': 'ollama',
     'qwen2.5:7b': 'ollama',
+    'gpt-oss:20b': 'ollama',
+    'deepseek-r1:8b': 'ollama',
+    'gemma3:4b': 'ollama',
+    'qwen3:8b': 'ollama',
+    'qwen3:14b': 'ollama',
+    'llama3.2:3b': 'ollama',
 }
 
 # Available models per framework
@@ -89,6 +95,12 @@ PYTORCH_MODELS = [
 OLLAMA_MODELS = [
     "llama3.1:8b",
     "qwen2.5:7b",
+    "gpt-oss:20b",
+    "deepseek-r1:8b",
+    "gemma3:4b",
+    "qwen3:8b",
+    "qwen3:14b",
+    "llama3.2:3b",
 ]
 ONNX_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
@@ -268,7 +280,13 @@ def get_unique_models(framework="pytorch"):
     elif framework == "ollama":
         return [
             "llama3.1:8b",
-            "qwen2.5:7b"
+            "qwen2.5:7b",
+            "gpt-oss:20b",
+            "deepseek-r1:8b",
+            "gemma3:4b",
+            "qwen3:8b",
+            "qwen3:14b",
+            "llama3.2:3b"
         ]
     elif framework == "onnx":
         return [

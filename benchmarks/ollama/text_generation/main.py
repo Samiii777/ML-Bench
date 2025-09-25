@@ -34,6 +34,36 @@ def get_model_configs():
             'name': 'qwen2.5:7b',
             'model_id': 'qwen2.5:7b', 
             'type': 'text_generation'
+        },
+        {
+            'name': 'gpt-oss:20b',
+            'model_id': 'gpt-oss:20b',
+            'type': 'text_generation'
+        },
+        {
+            'name': 'deepseek-r1:8b',
+            'model_id': 'deepseek-r1:8b',
+            'type': 'text_generation'
+        },
+        {
+            'name': 'gemma3:4b',
+            'model_id': 'gemma3:4b',
+            'type': 'text_generation'
+        },
+        {
+            'name': 'qwen3:8b',
+            'model_id': 'qwen3:8b',
+            'type': 'text_generation'
+        },
+        {
+            'name': 'qwen3:14b',
+            'model_id': 'qwen3:14b',
+            'type': 'text_generation'
+        },
+        {
+            'name': 'llama3.2:3b',
+            'model_id': 'llama3.2:3b',
+            'type': 'text_generation'
         }
     ]
 
