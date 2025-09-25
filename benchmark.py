@@ -615,6 +615,8 @@ class BenchmarkRunner:
                         use_cases_to_test = ["generation"]
                     elif model_family == "gpu_ops":
                         use_cases_to_test = ["compute"]
+                    elif model_family == "ollama":
+                        use_cases_to_test = ["text_generation"]
                     else:
                         # For unknown models, use the default use case
                         use_cases_to_test = [get_default_use_case_for_model(model)]
@@ -734,6 +736,8 @@ class BenchmarkRunner:
                     use_cases_to_test = ["generation"]
                 elif model_family == "gpu_ops":
                     use_cases_to_test = ["compute"]
+                elif model_family == "ollama":
+                    use_cases_to_test = ["text_generation"]
                 else:
                     # For unknown models, use the default use case
                     use_cases_to_test = [get_default_use_case_for_model(model)]

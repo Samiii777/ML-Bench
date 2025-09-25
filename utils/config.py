@@ -353,6 +353,8 @@ def get_default_use_case_for_model(model_name):
         return "compute"
     elif model_family == "llama":
         return "text_generation"
+    elif model_family == "ollama":
+        return "text_generation"
     elif model_family == "flux":
         return "generation" # FLUX Schnell is a generation model
     else:
