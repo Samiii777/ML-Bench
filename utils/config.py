@@ -382,7 +382,7 @@ def get_models_for_use_case(use_case, framework="pytorch"):
             compatible_models.append(model)
         elif use_case == "compute" and model_family == "gpu_ops":
             compatible_models.append(model)
-        elif use_case == "text_generation" and model_family in ["llama"]:
+        elif use_case == "text_generation" and model_family in ["llama", "ollama"]:
             compatible_models.append(model)
         elif use_case == "text_classification" and model_family == "bert":
             compatible_models.append(model)

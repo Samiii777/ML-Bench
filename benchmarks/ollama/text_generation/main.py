@@ -153,11 +153,18 @@ def run_single_model_benchmark(model_config, params):
         all_times.append(wall_time)
         all_token_counts.append(eval_count)
         
-        if eval_duration > 0:
+        # Calculate throughput - prefer eval_duration, fallback to wall_time
+        if eval_duration > 0 and eval_count > 0:
             throughput = eval_count / eval_duration
             all_throughputs.append(throughput)
-        
-        print(f"  Time: {wall_time:.2f}s | Tokens: {eval_count} | Throughput: {eval_count/eval_duration:.2f} tokens/sec" if eval_duration > 0 else f"  Time: {wall_time:.2f}s | Tokens: {eval_count}")
+            print(f"  Time: {wall_time:.2f}s | Tokens: {eval_count} | Throughput: {throughput:.2f} tokens/sec")
+        elif wall_time > 0 and eval_count > 0:
+            # Fallback calculation using wall time
+            throughput = eval_count / wall_time
+            all_throughputs.append(throughput)
+            print(f"  Time: {wall_time:.2f}s | Tokens: {eval_count} | Throughput: {throughput:.2f} tokens/sec (wall time)")
+        else:
+            print(f"  Time: {wall_time:.2f}s | Tokens: {eval_count} | Throughput: N/A")
     
     # Calculate averages
     avg_time = sum(all_times) / len(all_times)
@@ -176,7 +183,7 @@ def run_single_model_benchmark(model_config, params):
     print(f"\n# Benchmark Framework Parseable Output for {model_config['name']}")
     print(f"Framework: Ollama")
     print(f"Task: text_generation")
-    print(f"Throughput: {avg_throughput:.2f} tokens/sec")
+    print(f"Tokens per second: {avg_throughput:.2f}")
     print(f"Per-sample Latency: {avg_time*1000:.2f} ms/sample")
     print(f"Average Tokens: {avg_tokens:.1f}")
     print(f"# End Parseable Output for {model_config['name']}")
