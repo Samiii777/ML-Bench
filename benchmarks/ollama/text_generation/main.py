@@ -97,6 +97,42 @@ def ensure_model_available(model_name):
         print(f"Error ensuring model availability: {e}")
         return False
 
+def unload_model(model_name):
+    """Unload a model from GPU memory and wait for completion"""
+    try:
+        url = 'http://localhost:11434/api/generate'
+        headers = {'Content-Type': 'application/json'}
+        payload = {"model": model_name, "prompt": "", "keep_alive": 0}
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        
+        if response.status_code == 200:
+            print(f"Model {model_name} unload requested...")
+            
+            # Give Ollama time to actually unload the model from GPU memory
+            # This prevents the next model from failing due to insufficient memory
+            print(f"Waiting for GPU memory to be freed...")
+            time.sleep(5)  # Wait 5 seconds for the unload to complete
+            
+            # Additional check: Try to ping the Ollama server to ensure it's responsive
+            try:
+                check_response = requests.get('http://localhost:11434/api/tags', timeout=5)
+                if check_response.status_code == 200:
+                    print(f"Model {model_name} unloaded and server is ready")
+                    return True
+                else:
+                    print(f"Warning: Server not responding properly after unloading {model_name}")
+                    return False
+            except Exception as e:
+                print(f"Warning: Could not verify server status after unloading {model_name}: {e}")
+                # Still return True as the initial unload request succeeded
+                return True
+        else:
+            print(f"Warning: Failed to unload model {model_name} - {response.status_code}")
+            return False
+    except Exception as e:
+        print(f"Warning: Error unloading model {model_name}: {e}")
+        return False
+
 def run_generation(model_name, prompt):
     """Run text generation with Ollama"""
     url = 'http://localhost:11434/api/generate'
@@ -167,6 +203,9 @@ def run_single_model_benchmark(model_config, params):
         
         result = run_generation(model_name, prompt)
         if result is None:
+            # Unload model before failing
+            print(f"\nCleaning up model {model_config['name']} after failure...")
+            unload_model(model_name)
             return {
                 'model': model_config['name'],
                 'status': 'FAILED',
@@ -217,6 +256,10 @@ def run_single_model_benchmark(model_config, params):
     print(f"Per-sample Latency: {avg_time*1000:.2f} ms/sample")
     print(f"Average Tokens: {avg_tokens:.1f}")
     print(f"# End Parseable Output for {model_config['name']}")
+    
+    # Unload model to free GPU memory for next benchmark
+    print(f"\nCleaning up model {model_config['name']}...")
+    unload_model(model_name)
     
     return {
         'model': model_config['name'],
