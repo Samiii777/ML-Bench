@@ -75,10 +75,9 @@ def load_yolo_model(model_name, device, precision="fp32"):
         model.to(device)
         
         # Set precision
-        # Note: For fp16, we'll use torch.cuda.amp.autocast during inference
-        # instead of model.half() to avoid dtype mismatch issues during model fusion
-        if precision == "fp16":
-            print("FP16 precision will be applied using torch.cuda.amp.autocast")
+        if precision == "fp16" and device.type == "cuda":
+            model.half()
+            print("Using FP16 precision")
         else:
             print(f"Using {precision} precision")
         
@@ -143,7 +142,9 @@ def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, n
             # YOLOv5 expects images in 0-255 range, normalized to 0-1 internally
             input_data = input_data / 255.0
             
-            # Keep input data in fp32 for YOLOv5, precision will be handled by autocast
+            if precision == "fp16" and device.type == "cuda":
+                input_data = input_data.half()
+            
             input_data = input_data.to(device)
             
         else:
@@ -168,7 +169,7 @@ def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, n
             with torch.no_grad():
                 if is_real_yolo:
                     # Real YOLOv5 inference
-                    if (precision == "mixed" or precision == "fp16") and device.type == "cuda":
+                    if precision == "mixed" and device.type == "cuda":
                         with torch.amp.autocast('cuda'):
                             _ = model(input_data, verbose=False)
                     else:
@@ -194,7 +195,7 @@ def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, n
             with torch.no_grad():
                 if is_real_yolo:
                     # Real YOLOv5 inference
-                    if (precision == "mixed" or precision == "fp16") and device.type == "cuda":
+                    if precision == "mixed" and device.type == "cuda":
                         with torch.amp.autocast('cuda'):
                             results = model(input_data, verbose=False)
                     else:
