@@ -52,7 +52,7 @@ class BenchmarkRunner:
         
     def get_available_models(self, framework: str, model_prefix: str = None) -> List[str]:
         """Get list of available models for a framework"""
-        if framework in ["pytorch", "onnx", "ollama"]:
+        if framework in ["pytorch", "onnx", "ollama", "comfyui"]:
             available_models = get_available_models(framework)
             if model_prefix == "resnet":
                 return [m for m in available_models if m.startswith("resnet")]
@@ -68,6 +68,13 @@ class BenchmarkRunner:
         if framework == "ollama":
             # Ollama uses a simpler structure: benchmarks/ollama/use_case/main.py
             base_path = Path("benchmarks") / "ollama" / use_case
+            script_path = base_path / "main.py"
+            return str(script_path)
+        
+        # Handle ComfyUI framework differently
+        if framework == "comfyui":
+            # ComfyUI uses: benchmarks/ComfyUI/main.py
+            base_path = Path("benchmarks") / "ComfyUI"
             script_path = base_path / "main.py"
             return str(script_path)
         
@@ -265,6 +272,17 @@ class BenchmarkRunner:
                     # Extract number from line like "Throughput: 123.45 samples/sec"
                     throughput_str = line.split(':')[1].strip().replace('samples/sec', '').strip()
                     metrics['throughput_fps'] = float(throughput_str)
+                except:
+                    pass
+            
+            # Look for seconds/image (alternative metric for generation)
+            if "seconds/image" in line and "FINAL RESULT" in line:
+                try:
+                    # Extract number from line like "FINAL RESULT: 3.456 seconds/image"
+                    seconds_per_image = float(line.split(':')[1].strip().replace('seconds/image', '').strip())
+                    # Convert to throughput for consistency
+                    metrics['throughput_fps'] = 1.0 / seconds_per_image
+                    metrics['seconds_per_image'] = seconds_per_image
                 except:
                     pass
             
@@ -617,6 +635,8 @@ class BenchmarkRunner:
                         use_cases_to_test = ["compute"]
                     elif model_family == "ollama":
                         use_cases_to_test = ["text_generation"]
+                    elif model_family == "comfyui":
+                        use_cases_to_test = ["generation"]
                     else:
                         # For unknown models, use the default use case
                         use_cases_to_test = [get_default_use_case_for_model(model)]
@@ -738,6 +758,8 @@ class BenchmarkRunner:
                     use_cases_to_test = ["compute"]
                 elif model_family == "ollama":
                     use_cases_to_test = ["text_generation"]
+                elif model_family == "comfyui":
+                    use_cases_to_test = ["generation"]
                 else:
                     # For unknown models, use the default use case
                     use_cases_to_test = [get_default_use_case_for_model(model)]
@@ -827,6 +849,15 @@ class BenchmarkRunner:
                                 elif use_case == "text_generation":
                                     tokens_per_sec = metrics.get("tokens_per_second", 0)
                                     safe_print(f"{checkmark} {tokens_per_sec:.1f} tokens/s")
+                                elif use_case == "generation":
+                                    # For image generation, show seconds/image
+                                    if metrics.get("seconds_per_image"):
+                                        seconds_per_img = metrics["seconds_per_image"]
+                                    elif metrics.get("throughput_fps"):
+                                        seconds_per_img = 1.0 / metrics["throughput_fps"]
+                                    else:
+                                        seconds_per_img = 0
+                                    safe_print(f"{checkmark} {seconds_per_img:.2f} s/img")
                                 else:
                                     throughput = metrics.get("throughput_fps", 0)
                                     safe_print(f"{checkmark} {throughput:.2f} samples/sec")
@@ -1302,7 +1333,7 @@ class BenchmarkRunner:
 def main():
     parser = argparse.ArgumentParser(description="ML Model Benchmarking Framework")
     parser.add_argument("--framework", type=str, nargs='*',
-                       choices=["pytorch", "onnx", "tensorflow", "ollama"],
+                       choices=["pytorch", "onnx", "tensorflow", "ollama", "comfyui"],
                        help="ML framework to benchmark (default: all available)")
     parser.add_argument("--model", type=str, nargs='*',
                        help="Model name (e.g., resnet50, deepseek-r1) or HuggingFace model ID (e.g., microsoft/DialoGPT-medium, deepseek-ai/DeepSeek-R1-Distill-Qwen-7B, default: all available)")

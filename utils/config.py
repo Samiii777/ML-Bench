@@ -71,6 +71,9 @@ MODEL_FAMILIES = {
     'qwen3:8b': 'ollama',
     'qwen3:14b': 'ollama',
     'llama3.2:3b': 'ollama',
+    # ComfyUI models
+    'comfyui_flux_schnell': 'comfyui',
+    'comfyui': 'comfyui',
 }
 
 # Available models per framework
@@ -102,6 +105,11 @@ OLLAMA_MODELS = [
     "qwen3:14b",
     "llama3.2:3b",
 ]
+
+COMFYUI_MODELS = [
+    "comfyui_flux_schnell",
+]
+
 ONNX_MODELS = [
     "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
     "inceptionv3", "inception_v3",
@@ -152,6 +160,9 @@ DEFAULT_USE_CASE_PRECISIONS = {
 FRAMEWORK_PRECISION_OVERRIDES = {
     "ollama": {
         "text_generation": ["auto"]  # Ollama handles precision internally
+    },
+    "comfyui": {
+        "generation": ["fp16"]  # ComfyUI FLUX models use FP16
     }
 }
 DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64]
@@ -169,6 +180,9 @@ DEFAULT_TRAINING_BATCH_SIZES = {
 FRAMEWORK_BATCH_SIZE_OVERRIDES = {
     "ollama": {
         "text_generation": [1]  # Ollama handles batching internally, just use 1
+    },
+    "comfyui": {
+        "generation": [1]  # ComfyUI generates one image at a time
     }
 }
 DEFAULT_FRAMEWORK = "pytorch"
@@ -295,6 +309,10 @@ def get_unique_models(framework="pytorch"):
             "yolov5s", "yolov5m", "yolov5l", "yolov5x",  # YOLOv5 variants
             "bert-base-uncased", "bert-large-uncased"  # BERT models
         ]
+    elif framework == "comfyui":
+        return [
+            "comfyui_flux_schnell"  # ComfyUI FLUX.1-schnell
+        ]
     else:
         return get_unique_models("pytorch")  # Default to pytorch
 
@@ -306,6 +324,8 @@ def get_available_models(framework="pytorch"):
         return ONNX_MODELS.copy()
     elif framework == "ollama":
         return OLLAMA_MODELS.copy()
+    elif framework == "comfyui":
+        return COMFYUI_MODELS.copy()
     else:
         return PYTORCH_MODELS.copy()  # Default to pytorch
 
@@ -356,7 +376,9 @@ def get_default_use_case_for_model(model_name):
     elif model_family == "ollama":
         return "text_generation"
     elif model_family == "flux":
-        return "generation" # FLUX Schnell is a generation model
+        return "generation"  # FLUX Schnell is a generation model
+    elif model_family == "comfyui":
+        return "generation"  # ComfyUI is for image generation
     else:
         return "classification"  # Default fallback
 
@@ -379,7 +401,9 @@ def get_available_frameworks_for_model(model_name):
     elif model_family == "llama":
         return ["pytorch"]  # Only PyTorch for llama
     elif model_family == "flux":
-        return ["pytorch"] # Only PyTorch for FLUX Schnell
+        return ["pytorch"]  # Only PyTorch for FLUX Schnell
+    elif model_family == "comfyui":
+        return ["comfyui"]  # Only ComfyUI framework for ComfyUI models
     elif model_family == "ollama":
         return ["ollama"] # Only Ollama for Ollama models
     else:
@@ -414,7 +438,7 @@ def get_models_for_use_case(use_case, framework="pytorch"):
 def get_available_frameworks_for_use_case(use_case):
     """Get list of available frameworks for a specific use case"""
     if use_case == "generation":
-        return ["pytorch"]  # Only PyTorch supports Stable Diffusion
+        return ["pytorch", "comfyui"]  # PyTorch and ComfyUI support image generation (Stable Diffusion, FLUX)
     elif use_case == "classification":
         return ["pytorch", "onnx"]  # Both frameworks support ResNet
     elif use_case == "detection":
@@ -427,8 +451,6 @@ def get_available_frameworks_for_use_case(use_case):
         return ["pytorch", "ollama"]  # PyTorch and Ollama for text generation
     elif use_case == "text_classification":
         return ["pytorch", "onnx"]  # Both frameworks support BERT
-    elif use_case == "generation":
-        return ["pytorch"] # Only PyTorch supports FLUX Schnell
     else:
         return ["pytorch"]  # Default to PyTorch only
 

@@ -339,8 +339,18 @@ class BenchmarkResults:
                     performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
                 else:
                     performance_str = "N/A"
+            elif usecase == "generation":
+                # For image generation, show seconds/image instead of samples/sec
+                if metrics.get("seconds_per_image"):
+                    performance_str = f"{metrics['seconds_per_image']:.2f} s/img"
+                elif metrics.get("throughput_fps"):
+                    # Calculate seconds/image from throughput
+                    seconds_per_img = 1.0 / metrics['throughput_fps']
+                    performance_str = f"{seconds_per_img:.2f} s/img"
+                else:
+                    performance_str = "N/A"
             else:
-                # For other use cases (classification, generation), use samples/sec
+                # For other use cases (classification, detection, etc), use samples/sec
                 if metrics.get("throughput_fps"):
                     performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
                 else:
@@ -535,8 +545,18 @@ class BenchmarkResults:
                     performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
                 else:
                     performance_str = "N/A"
+            elif usecase == "generation":
+                # For image generation, show seconds/image instead of samples/sec
+                if metrics.get("seconds_per_image"):
+                    performance_str = f"{metrics['seconds_per_image']:.2f} s/img"
+                elif metrics.get("throughput_fps"):
+                    # Calculate seconds/image from throughput
+                    seconds_per_img = 1.0 / metrics['throughput_fps']
+                    performance_str = f"{seconds_per_img:.2f} s/img"
+                else:
+                    performance_str = "N/A"
             else:
-                # For other use cases (classification, generation), use samples/sec
+                # For other use cases (classification, detection, etc), use samples/sec
                 if metrics.get("throughput_fps"):
                     performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
                 else:
