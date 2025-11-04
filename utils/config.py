@@ -73,6 +73,7 @@ MODEL_FAMILIES = {
     'llama3.2:3b': 'ollama',
     # ComfyUI models
     'comfyui_flux_schnell': 'comfyui',
+    'comfyui_flux_dev': 'comfyui',
     'comfyui': 'comfyui',
 }
 
@@ -108,6 +109,7 @@ OLLAMA_MODELS = [
 
 COMFYUI_MODELS = [
     "comfyui_flux_schnell",
+    "comfyui_flux_dev",
 ]
 
 ONNX_MODELS = [
@@ -311,7 +313,8 @@ def get_unique_models(framework="pytorch"):
         ]
     elif framework == "comfyui":
         return [
-            "comfyui_flux_schnell"  # ComfyUI FLUX.1-schnell
+            "comfyui_flux_schnell",  # ComfyUI FLUX.1-schnell
+            "comfyui_flux_dev"       # ComfyUI FLUX.1-dev
         ]
     else:
         return get_unique_models("pytorch")  # Default to pytorch

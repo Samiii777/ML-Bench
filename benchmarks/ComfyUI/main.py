@@ -36,10 +36,21 @@ class ComfyUIServer:
         self.server_address = f"127.0.0.1:{port}"
         self.process = None
         self.server_logs = []  # Store server logs
+        self.log_file = None  # Log file for capturing execution times
         
     def start(self):
         """Start ComfyUI server in background"""
         print(f"Starting ComfyUI server on port {self.port}...")
+        
+        # Kill any existing process on this port first
+        try:
+            result = subprocess.run(['fuser', '-k', f'{self.port}/tcp'], 
+                                   capture_output=True, timeout=2)
+        except:
+            pass  # fuser might not be available
+        
+        # Wait a moment for port to be released
+        time.sleep(1)
         
         # Get python from current venv
         python_exe = sys.executable
@@ -73,6 +84,10 @@ class ComfyUIServer:
                     print(f"✓ ComfyUI server ready")
                     return True
             except requests.exceptions.ConnectionError:
+                # Check if process died
+                if self.process.poll() is not None:
+                    print(f"✗ Server process died with code {self.process.poll()}")
+                    return False
                 time.sleep(1)
         
         print("Warning: ComfyUI server may not be ready")
@@ -92,6 +107,10 @@ class ComfyUIServer:
             except:
                 self.process.kill()
             self.process = None
+            
+            # Wait for port to be released
+            time.sleep(2)
+            print("✓ Server stopped")
 
 
 class ComfyUIAPI:
@@ -102,50 +121,109 @@ class ComfyUIAPI:
     
     def queue_prompt(self, workflow):
         """Queue a workflow for execution"""
-        data = json.dumps({"prompt": workflow}).encode('utf-8')
+        import uuid
+        
+        # Use unique client_id for each request
+        request_data = {
+            "prompt": workflow,
+            "client_id": str(uuid.uuid4())
+        }
+        
+        data = json.dumps(request_data).encode('utf-8')
         response = requests.post(
             f"http://{self.server_address}/prompt",
             data=data
         )
         return response.json()
     
-    def wait_for_completion(self, prompt_id, check_interval=0.1):
+    def clear_cache(self):
+        """Clear ComfyUI's execution cache"""
+        try:
+            # Try to post to free endpoint to clear cache
+            requests.post(f"http://{self.server_address}/free", json={"unload_models": False, "free_memory": False})
+        except:
+            pass
+    
+    def wait_for_completion(self, prompt_id, check_interval=0.5):
         """Wait for workflow to complete and return execution info"""
+        # First, wait for the prompt to start executing
+        time.sleep(0.5)  # Give server time to pick up the job
+        
         while True:
-            queue = requests.get(f"http://{self.server_address}/queue").json()
-            
-            # Check if still in queue
-            queue_remaining = queue['queue_running'] + queue['queue_pending']
-            if len(queue_remaining) == 0:
-                # Check if in history
-                history = requests.get(f"http://{self.server_address}/history/{prompt_id}").json()
-                if prompt_id in history:
-                    # Extract execution time from history
-                    history_entry = history[prompt_id]
-                    
-                    # ComfyUI execution time is in status.completed_at - status.started_at
-                    # But the status might have execution time directly
-                    execution_time = None
-                    if 'status' in history_entry:
-                        status = history_entry['status']
-                        # Check for completed and started times
-                        if 'completed_at' in status and 'started_at' in status:
-                            execution_time = status['completed_at'] - status['started_at']
-                    
-                    return {
-                        'history': history_entry,
-                        'execution_time': execution_time
-                    }
-            
-            time.sleep(check_interval)
+            try:
+                # Check queue status
+                queue = requests.get(f"http://{self.server_address}/queue").json()
+                
+                # Check if our prompt is in the running queue
+                queue_running = queue.get('queue_running', [])
+                queue_pending = queue.get('queue_pending', [])
+                
+                # Check if still processing
+                is_running = any(item[1] == prompt_id for item in queue_running if len(item) >= 2)
+                is_pending = any(item[1] == prompt_id for item in queue_pending if len(item) >= 2)
+                
+                if not is_running and not is_pending:
+                    # Check if in history (completed)
+                    history = requests.get(f"http://{self.server_address}/history/{prompt_id}").json()
+                    if prompt_id in history:
+                        # Workflow completed, extract execution time
+                        history_entry = history[prompt_id]
+                        
+                        # Try to get execution time from status
+                        execution_time = None
+                        if 'status' in history_entry:
+                            status = history_entry['status']
+                            if 'completed_at' in status and 'started_at' in status:
+                                execution_time = status['completed_at'] - status['started_at']
+                        
+                        return {
+                            'history': history_entry,
+                            'execution_time': execution_time
+                        }
+                
+                # Still processing, wait before checking again
+                time.sleep(check_interval)
+                
+            except Exception as e:
+                print(f"Warning: Error checking completion status: {e}")
+                time.sleep(check_interval)
 
 
-def setup_comfyui(benchmark_dir):
-    """Setup ComfyUI if not already installed"""
+def setup_comfyui(benchmark_dir, model_variant='schnell'):
+    """Setup ComfyUI if not already installed
+    
+    Args:
+        model_variant: 'schnell' or 'dev'
+    """
     comfyui_path = benchmark_dir / "ComfyUI"
     
     if comfyui_path.exists() and (comfyui_path / "main.py").exists():
         print(f"✓ ComfyUI already installed at {comfyui_path}")
+        
+        # Check if the requested model is downloaded
+        model_filename = f"flux1-{model_variant}.safetensors"
+        model_path = comfyui_path / "models" / "diffusion_models" / model_filename
+        
+        if not model_path.exists():
+            print(f"Model {model_filename} not found, downloading...")
+            project_root = benchmark_dir.parent.parent
+            setup_script = project_root / "utils" / "setup_comfyui.py"
+            
+            cmd = [
+                sys.executable,
+                str(setup_script),
+                "--model", f"flux-{model_variant}",
+                "--dir", str(comfyui_path),
+                "--skip-clone",
+                "--skip-requirements"
+            ]
+            
+            print(f"Running: {' '.join(cmd)}")
+            result = subprocess.run(cmd, cwd=str(project_root))
+            
+            if result.returncode != 0:
+                raise RuntimeError(f"FLUX.1-{model_variant} download failed")
+        
         return comfyui_path
     
     print("Setting up ComfyUI...")
@@ -155,11 +233,11 @@ def setup_comfyui(benchmark_dir):
     if not setup_script.exists():
         raise FileNotFoundError(f"Setup script not found: {setup_script}")
     
-    # Run setup with flux-schnell model
+    # Run setup with requested model
     cmd = [
         sys.executable,
         str(setup_script),
-        "--model", "flux-schnell",
+        "--model", f"flux-{model_variant}",
         "--dir", str(comfyui_path)
         # Don't skip requirements - we need ComfyUI dependencies
     ]
@@ -174,21 +252,32 @@ def setup_comfyui(benchmark_dir):
     return comfyui_path
 
 
-def create_flux_workflow(prompt_text, seed=42, steps=4, width=1024, height=1024, randomize_seed=False):
-    """Create FLUX.1-schnell workflow
+def create_flux_workflow(prompt_text, seed=42, steps=4, width=1024, height=1024, randomize_seed=False, model_variant='schnell', force_unique=False, run_id=0):
+    """Create FLUX workflow (schnell or dev)
     
     Args:
+        model_variant: 'schnell' or 'dev'
         randomize_seed: If True, uses random seed for each generation
-                        If False, uses fixed seed (faster due to caching)
+        force_unique: If True, adds timestamp to prompt to force unique execution
+        run_id: Unique run identifier to prevent caching
     """
     # Use random seed if requested, otherwise use fixed seed
-    actual_seed = int(time.time() * 1000) % (2**31) if randomize_seed else seed
+    actual_seed = int(time.time() * 1000000 + run_id) % (2**31) if randomize_seed else (seed + run_id)
+    
+    # Add unique identifier to prompt if needed (prevents caching)
+    if force_unique:
+        unique_prompt = f"{prompt_text} [ID:{int(time.time()*1000000)%1000000}_{run_id}]"
+    else:
+        unique_prompt = prompt_text
+    
+    # Determine model filename
+    model_filename = f"flux1-{model_variant}.safetensors"
     
     workflow = {
         "12": {
             "class_type": "UNETLoader",
             "inputs": {
-                "unet_name": "flux1-schnell.safetensors",
+                "unet_name": model_filename,
                 "weight_dtype": "default"
             }
         },
@@ -209,7 +298,7 @@ def create_flux_workflow(prompt_text, seed=42, steps=4, width=1024, height=1024,
         "6": {
             "class_type": "CLIPTextEncode",
             "inputs": {
-                "text": prompt_text,
+                "text": unique_prompt,
                 "clip": ["11", 0]
             }
         },
@@ -269,7 +358,7 @@ def create_flux_workflow(prompt_text, seed=42, steps=4, width=1024, height=1024,
         "9": {
             "class_type": "SaveImage",
             "inputs": {
-                "filename_prefix": "benchmark",
+                "filename_prefix": f"benchmark_{model_variant}",
                 "images": ["8", 0]
             }
         }
@@ -278,17 +367,34 @@ def create_flux_workflow(prompt_text, seed=42, steps=4, width=1024, height=1024,
     return workflow
 
 
-def benchmark_comfyui_flux(num_warmup=3, num_runs=10, steps=4, width=1024, height=1024):
-    """Benchmark FLUX.1-schnell using ComfyUI"""
+def benchmark_comfyui_flux(model='comfyui_flux_schnell', num_warmup=3, num_runs=10, steps=None, width=1024, height=1024):
+    """Benchmark FLUX using ComfyUI
     
-    print(f"ComfyUI FLUX Benchmark")
+    Args:
+        model: 'comfyui_flux_schnell' or 'comfyui_flux_dev'
+    """
+    # Determine model variant and default steps
+    if 'dev' in model:
+        model_variant = 'dev'
+        model_name = 'FLUX.1-dev'
+        default_steps = 20  # Dev needs more steps
+    else:
+        model_variant = 'schnell'
+        model_name = 'FLUX.1-schnell'
+        default_steps = 4  # Schnell optimized for 4 steps
+    
+    # Use default steps if not specified
+    if steps is None:
+        steps = default_steps
+    
+    print(f"ComfyUI FLUX Benchmark - {model_name}")
     print(f"Steps: {steps}, Resolution: {width}x{height}")
     print(f"Warmup: {num_warmup}, Runs: {num_runs}")
     
     benchmark_dir = Path(__file__).parent
     
     # Setup ComfyUI if needed
-    comfyui_path = setup_comfyui(benchmark_dir)
+    comfyui_path = setup_comfyui(benchmark_dir, model_variant=model_variant)
     
     # Store workflows
     workflow_dir = benchmark_dir / "workflows"
@@ -303,10 +409,11 @@ def benchmark_comfyui_flux(num_warmup=3, num_runs=10, steps=4, width=1024, heigh
         steps=steps,
         width=width,
         height=height,
-        randomize_seed=False  # Fixed seed for consistent benchmarking
+        randomize_seed=False,  # Fixed seed for consistent benchmarking
+        model_variant=model_variant
     )
     
-    workflow_file = workflow_dir / "flux_schnell_fp16_benchmark.json"
+    workflow_file = workflow_dir / f"flux_{model_variant}_fp16_benchmark.json"
     with open(workflow_file, 'w') as f:
         json.dump(workflow, f, indent=2)
     
@@ -328,10 +435,25 @@ def benchmark_comfyui_flux(num_warmup=3, num_runs=10, steps=4, width=1024, heigh
             torch.cuda.reset_peak_memory_stats()
             torch.cuda.synchronize()
         
+        # Clear cache before starting
+        api.clear_cache()
+        
         # Warmup
         print(f"\nWarmup ({num_warmup} runs)...")
         for i in range(num_warmup):
-            result = api.queue_prompt(workflow)
+            # Create unique workflow for each warmup run
+            warmup_workflow = create_flux_workflow(
+                "a beautiful landscape",
+                seed=1000 + i,  # Different seeds for warmup
+                steps=steps,
+                width=width,
+                height=height,
+                randomize_seed=True,
+                model_variant=model_variant,
+                force_unique=False,
+                run_id=-(i+1)  # Negative IDs for warmup
+            )
+            result = api.queue_prompt(warmup_workflow)
             completion_info = api.wait_for_completion(result['prompt_id'])
             exec_time = completion_info.get('execution_time')
             if exec_time:
@@ -347,15 +469,30 @@ def benchmark_comfyui_flux(num_warmup=3, num_runs=10, steps=4, width=1024, heigh
         comfyui_execution_times = []
         
         for i in range(num_runs):
-            # Create workflow with same prompt but incrementing seed
-            # This caches text encoding but forces actual diffusion sampling
+            # Create workflow with varying prompt for realistic end-to-end timing
+            # This measures full pipeline: text encoding + diffusion + VAE decode
+            prompts = [
+                "a beautiful sunset over mountains",
+                "a serene lake at dawn with mist",
+                "a futuristic city skyline at night",
+                "a peaceful forest path in autumn",
+                "a dramatic ocean wave crashing on rocks",
+                "a cozy cabin in a snowy landscape",
+                "a vibrant flower garden in spring",
+                "a majestic mountain peak at sunrise",
+                "a tranquil beach with palm trees",
+                "a mystical forest with glowing mushrooms"
+            ]
             run_workflow = create_flux_workflow(
-                "a beautiful sunset over mountains",  # Same prompt
-                seed=42 + i,  # Different seed each run
+                prompts[i % len(prompts)],  # Different prompts for realistic variation
+                seed=42 + i,
                 steps=steps,
                 width=width,
                 height=height,
-                randomize_seed=False
+                randomize_seed=True,  # Random seed to prevent caching
+                model_variant=model_variant,
+                force_unique=False,
+                run_id=i  # Unique run ID
             )
             
             if device == "cuda":
@@ -407,7 +544,7 @@ def benchmark_comfyui_flux(num_warmup=3, num_runs=10, steps=4, width=1024, heigh
         print(f"\n{'='*60}")
         print(f"COMFYUI FLUX BENCHMARK RESULTS")
         print(f"{'='*60}")
-        print(f"Model: FLUX.1-schnell")
+        print(f"Model: {model_name}")
         print(f"Framework: ComfyUI")
         print(f"Device: {device}")
         print(f"Steps: {steps}")
@@ -446,14 +583,16 @@ def benchmark_comfyui_flux(num_warmup=3, num_runs=10, steps=4, width=1024, heigh
 def main():
     parser = argparse.ArgumentParser(description='ComfyUI FLUX Benchmark')
     # Standard benchmark framework arguments
-    parser.add_argument('--model', type=str, default='comfyui_flux_schnell', help='Model name - only FLUX schnell supported')
-    parser.add_argument('--precision', type=str, default='fp32', help='Precision (fp32/fp16/mixed) - not used by ComfyUI')
+    parser.add_argument('--model', type=str, default='comfyui_flux_schnell', 
+                       choices=['comfyui_flux_schnell', 'comfyui_flux_dev'],
+                       help='Model: comfyui_flux_schnell (4 steps) or comfyui_flux_dev (20+ steps)')
+    parser.add_argument('--precision', type=str, default='fp16', help='Precision (fp32/fp16/mixed) - not used by ComfyUI')
     parser.add_argument('--batch_size', type=int, default=1, help='Batch size - not used by ComfyUI')  
     parser.add_argument('--device', type=str, default='auto', help='Device (auto/cuda/cpu) - not used by ComfyUI')
     # ComfyUI-specific arguments
-    parser.add_argument('--num_warmup', type=int, default=3, help='Number of warmup runs')
+    parser.add_argument('--num_warmup', type=int, default=5, help='Number of warmup runs (default: 5 to stabilize caching)')
     parser.add_argument('--num_runs', type=int, default=10, help='Number of benchmark runs')
-    parser.add_argument('--steps', type=int, default=4, help='Number of sampling steps')
+    parser.add_argument('--steps', type=int, default=None, help='Number of sampling steps (default: 4 for schnell, 20 for dev)')
     parser.add_argument('--width', type=int, default=1024, help='Image width')
     parser.add_argument('--height', type=int, default=1024, help='Image height')
     
@@ -467,6 +606,7 @@ def main():
     print()
     
     results = benchmark_comfyui_flux(
+        model=args.model,
         num_warmup=args.num_warmup,
         num_runs=args.num_runs,
         steps=args.steps,

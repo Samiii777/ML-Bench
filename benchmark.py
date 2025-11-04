@@ -173,6 +173,9 @@ class BenchmarkRunner:
                 timeout_seconds = timeout_minutes * 60
                 if execution_provider == "TensorrtExecutionProvider" and timeout_minutes < 15:
                     timeout_seconds = 900  # Minimum 15 min for TensorRT
+                # Use longer timeout for ComfyUI (model loading + generation can be slow)
+                if framework == "comfyui" and timeout_minutes < 10:
+                    timeout_seconds = 600  # Minimum 10 min for ComfyUI
             
             # Set environment variables to include the root directory in Python path
             env = os.environ.copy()

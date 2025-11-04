@@ -1,6 +1,6 @@
 # ComfyUI Benchmark
 
-This benchmark tests FLUX.1-schnell image generation using ComfyUI as the backend.
+This benchmark tests FLUX.1 image generation (schnell and dev variants) using ComfyUI as the backend.
 
 ## Structure
 
@@ -27,26 +27,49 @@ benchmarks/ComfyUI/
 3. **Benchmark Execution**: Runs workflow via API and measures performance
 4. **Cleanup**: Stops server after benchmarking
 
+## Supported Models
+
+### FLUX.1-schnell (Default)
+- **Optimized for:** 4-step generation
+- **Speed:** ~4 seconds/image @ 1024x1024
+- **Quality:** Good, fast iterations
+- **Use case:** Rapid prototyping, batch generation
+
+### FLUX.1-dev
+- **Optimized for:** 20-50 steps
+- **Speed:** ~20 seconds/image @ 1024x1024 (20 steps)
+- **Quality:** Higher quality, more detailed
+- **Use case:** Production, final renders
+
 ## Usage
 
 ### Via Benchmark Framework
 
 ```bash
-# Run ComfyUI FLUX benchmark
+# Run both FLUX models (schnell + dev)
 python benchmark.py --framework comfyui
 
-# With custom parameters
-python benchmark.py --framework comfyui --num_runs 20
+# Run schnell only (faster)
+python benchmark.py --framework comfyui --model comfyui_flux_schnell
+
+# Run dev only (higher quality)
+python benchmark.py --framework comfyui --model comfyui_flux_dev
 ```
 
 ### Standalone
 
 ```bash
-# Direct execution
-python benchmarks/ComfyUI/main.py --num_runs 10 --steps 4
+# FLUX.1-schnell (fast, 4 steps)
+python benchmarks/ComfyUI/main.py --model comfyui_flux_schnell --num_runs 10
+
+# FLUX.1-dev (high quality, 20 steps)
+python benchmarks/ComfyUI/main.py --model comfyui_flux_dev --num_runs 5
 
 # Custom resolution
-python benchmarks/ComfyUI/main.py --width 512 --height 512 --steps 4
+python benchmarks/ComfyUI/main.py --model comfyui_flux_schnell --width 512 --height 512
+
+# Custom steps (override defaults)
+python benchmarks/ComfyUI/main.py --model comfyui_flux_dev --steps 50
 ```
 
 ## Requirements
@@ -58,22 +81,37 @@ python benchmarks/ComfyUI/main.py --width 512 --height 512 --steps 4
 
 ## Models Downloaded
 
-On first run, the following files are automatically downloaded to `ComfyUI/models/`:
-
+### FLUX.1-schnell (downloaded by default)
 - **UNET**: `flux1-schnell.safetensors` (~17GB)
-- **Text Encoders**: 
+- **Text Encoders** (shared):
   - `t5xxl_fp16.safetensors` (~9GB)
   - `clip_l.safetensors` (~1GB)
-- **VAE**: `ae.safetensors` (~330MB)
+- **VAE** (shared): `ae.safetensors` (~330MB)
+- **Total**: ~27GB
+
+### FLUX.1-dev (downloaded on first use)
+- **UNET**: `flux1-dev.safetensors` (~17GB)
+- **Text Encoders**: Shared with schnell
+- **VAE**: Shared with schnell
+- **Additional**: +17GB (only UNET is different)
+
+All files downloaded to `ComfyUI/models/`
 
 ## Metrics
 
 The benchmark reports:
-- **Throughput**: Images per second
+- **Time per Image**: Seconds to generate one image (primary metric)
+- **Throughput**: Images per second (calculated from time/image)
 - **Latency**: Average, min, max, std deviation (in seconds)
 - **Memory**: Peak GPU memory usage
-- **Steps**: Number of diffusion steps (default: 4 for schnell)
+- **Steps**: Number of diffusion steps (default: 4 for schnell, 20 for dev)
 - **Resolution**: Image dimensions (default: 1024x1024)
+
+### Performance Format
+```
+[1/1] comfyui/comfyui_flux_schnell[generation] fp16 BS=1  ✓ 4.04 s/img
+[1/1] comfyui/comfyui_flux_dev[generation] fp16 BS=1      ✓ 18.50 s/img (est.)
+```
 
 ## Notes
 

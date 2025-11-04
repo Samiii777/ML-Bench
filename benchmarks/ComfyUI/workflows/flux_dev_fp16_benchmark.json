@@ -2,7 +2,7 @@
   "12": {
     "class_type": "UNETLoader",
     "inputs": {
-      "unet_name": "flux1-schnell.safetensors",
+      "unet_name": "flux1-dev.safetensors",
       "weight_dtype": "default"
     }
   },
@@ -46,7 +46,7 @@
     "class_type": "BasicScheduler",
     "inputs": {
       "scheduler": "normal",
-      "steps": 4,
+      "steps": 20,
       "denoise": 1.0,
       "model": [
         "12",
@@ -116,7 +116,7 @@
   "9": {
     "class_type": "SaveImage",
     "inputs": {
-      "filename_prefix": "benchmark_schnell",
+      "filename_prefix": "benchmark_dev",
       "images": [
         "8",
         0
