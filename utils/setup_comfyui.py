@@ -59,17 +59,24 @@ def modify_requirements(comfyui_dir):
     with open(requirements_path, 'r') as f:
         lines = f.readlines()
     
+    # Packages to comment out (exact names only)
+    packages_to_comment = {'torch', 'torchaudio', 'torchvision'}
+    
     modified_lines = []
     for line in lines:
-        stripped = line.strip().lower()
-        # Check if line contains torch, torchaudio, or torchvision
-        if any(pkg in stripped for pkg in ['torch', 'torchaudio', 'torchvision']):
-            # Only comment if not already commented
-            if not line.strip().startswith('#'):
-                modified_lines.append(f"# {line}")
-                print(f"Commented out: {line.strip()}")
-            else:
-                modified_lines.append(line)
+        stripped = line.strip()
+        # Skip empty lines and already commented lines
+        if not stripped or stripped.startswith('#'):
+            modified_lines.append(line)
+            continue
+        
+        # Extract package name (before any version specifier like ==, >=, <, etc.)
+        package_name = stripped.lower().split('==')[0].split('>=')[0].split('<=')[0].split('<')[0].split('>')[0].split('~=')[0].split('!=')[0].split('[')[0].strip()
+        
+        # Check if this is one of the exact packages we want to comment out
+        if package_name in packages_to_comment:
+            modified_lines.append(f"# {line}")
+            print(f"Commented out: {line.strip()}")
         else:
             modified_lines.append(line)
     
