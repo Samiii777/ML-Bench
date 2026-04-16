@@ -24,9 +24,78 @@ from utils.shared_device_utils import get_gpu_memory_efficient
 from utils.safe_print import safe_print, format_success_message, get_safe_checkmark
 
 class BenchmarkRunner:
-    def __init__(self):
+    def __init__(self, verbose: bool = False, debug: bool = False):
         self.logger = BenchmarkLogger()
         self.results = BenchmarkResults()
+        # --verbose streams subprocess stdout/stderr live to the console.
+        # --debug implies --verbose and adds diagnostic info (cmd, cwd, env).
+        self.verbose = verbose or debug
+        self.debug = debug
+
+    def _run_subprocess(self, cmd, cwd, env, timeout_seconds):
+        """Run a subprocess, optionally streaming its output live.
+
+        Returns an object with ``.returncode``, ``.stdout``, ``.stderr``
+        (str). When ``self.verbose`` is True, stdout/stderr are merged and
+        streamed to the terminal line-by-line while still being captured
+        for downstream metric parsing.
+        """
+        if self.debug:
+            print()
+            self.logger.debug(f"[DEBUG] cmd: {' '.join(cmd)}")
+            self.logger.debug(f"[DEBUG] cwd: {cwd}")
+            self.logger.debug(f"[DEBUG] timeout: {timeout_seconds}s")
+
+        if not self.verbose:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                cwd=cwd,
+                env=env,
+            )
+
+        # Verbose path: stream merged stdout+stderr live.
+        # Add a newline so the test-description trailing line stays intact.
+        print()
+        print(f"{'-' * 20} subprocess output begin {'-' * 20}", flush=True)
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=cwd,
+            env=env,
+        )
+        captured = []
+        try:
+            assert process.stdout is not None
+            for line in process.stdout:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                captured.append(line)
+            process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                for line in process.stdout or []:
+                    captured.append(line)
+            except Exception:
+                pass
+            process.wait()
+            print(f"{'-' * 20} subprocess output end   {'-' * 20}", flush=True)
+            raise subprocess.TimeoutExpired(cmd, timeout_seconds, output="".join(captured))
+        print(f"{'-' * 20} subprocess output end   {'-' * 20}", flush=True)
+
+        class _Result:
+            pass
+        r = _Result()
+        r.returncode = process.returncode
+        r.stdout = "".join(captured)
+        r.stderr = ""
+        return r
 
     def _should_skip_model(self, model: str, skip_models: List[str]) -> bool:
         """Check if a model should be skipped based on skip list"""
@@ -186,14 +255,12 @@ class BenchmarkRunner:
             else:
                 env['PYTHONPATH'] = root_dir
             
-            # Run the benchmark script
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=timeout_seconds,
+            # Run the benchmark script (streams live output when --verbose/--debug)
+            result = self._run_subprocess(
+                cmd,
                 cwd=os.path.dirname(script_path),
-                env=env
+                env=env,
+                timeout_seconds=timeout_seconds,
             )
             
             execution_time = time.time() - start_time
@@ -214,13 +281,24 @@ class BenchmarkRunner:
                 }
             else:
                 # Check if this was likely an OOM error
-                error_output = result.stderr.lower()
+                combined_err = (result.stderr or "") + (result.stdout or "")
+                error_output = combined_err.lower()
                 if "out of memory" in error_output or "cuda out of memory" in error_output:
                     # Provide helpful OOM guidance
                     error_msg = f"CUDA Out of Memory. Try: reduce batch size, use fp16 precision, or enable CPU offload"
                 else:
                     error_msg = f"Script failed with return code {result.returncode}"
-                
+
+                if self.verbose or self.debug:
+                    # Surface the last bit of stdout/stderr so failures are diagnosable
+                    # even when the streamed log has scrolled off screen.
+                    tail_src = result.stderr or result.stdout or ""
+                    tail = "\n".join(tail_src.splitlines()[-40:])
+                    if tail.strip():
+                        print()
+                        self.logger.error(f"[FAIL tail] {' '.join(cmd)}")
+                        print(tail)
+
                 return {
                     "status": "FAIL",
                     "error": error_msg,
@@ -1383,6 +1461,10 @@ def main():
     parser.add_argument("--device", type=str, default="auto",
                        choices=["auto", "cpu", "cuda", "mps"],
                        help="Device to use for benchmarking (auto: auto-detect best device, cpu: force CPU, cuda: force CUDA, mps: force MPS for Apple Silicon)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                       help="Stream each benchmark subprocess's full stdout/stderr live to the console")
+    parser.add_argument("--debug", action="store_true",
+                       help="Verbose output plus diagnostic info (full command, cwd, timeout, failure tails)")
     
     args = parser.parse_args()
     
@@ -1396,7 +1478,10 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Create runner
-    runner = BenchmarkRunner()
+    runner = BenchmarkRunner(
+        verbose=getattr(args, 'verbose', False),
+        debug=getattr(args, 'debug', False),
+    )
     
     # Set VRAM check flag based on command line argument
     if getattr(args, 'skip_vram_check', False):

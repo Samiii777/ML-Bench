@@ -145,7 +145,9 @@ def train_epoch(model, dataloader, criterion, optimizer, scaler, device, use_amp
     batch_times = []
     
     for batch_idx, (data, target) in enumerate(dataloader):
-        start_time = time.time()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        start_time = time.perf_counter()
         
         data, target = data.to(device), target.to(device)
         
@@ -171,7 +173,9 @@ def train_epoch(model, dataloader, criterion, optimizer, scaler, device, use_amp
         total += target.size(0)
         correct += (predicted == target).sum().item()
         
-        batch_time = time.time() - start_time
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        batch_time = time.perf_counter() - start_time
         batch_times.append(batch_time)
         
         # Break early for benchmarking (don't need full epoch)
@@ -194,7 +198,9 @@ def validate_epoch(model, dataloader, criterion, device, use_amp=False):
     
     with torch.no_grad():
         for batch_idx, (data, target) in enumerate(dataloader):
-            start_time = time.time()
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            start_time = time.perf_counter()
             
             data, target = data.to(device), target.to(device)
             
@@ -211,7 +217,9 @@ def validate_epoch(model, dataloader, criterion, device, use_amp=False):
             total += target.size(0)
             correct += (predicted == target).sum().item()
             
-            batch_time = time.time() - start_time
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            batch_time = time.perf_counter() - start_time
             batch_times.append(batch_time)
             
             # Break early for benchmarking
@@ -236,9 +244,13 @@ def benchmark_training(model_name, training_mode, precision, batch_size, num_epo
     device = get_device()
     print(f"Device: {device}")
     
-    # Enable mixed precision for FP16 or mixed precision
-    use_amp = (precision in ["fp16", "mixed"])
-    scaler = GradScaler('cuda') if use_amp and device.type == 'cuda' else None
+    # Enable AMP only on CUDA (autocast('cuda') + GradScaler require CUDA).
+    # On CPU/MPS, fall back to FP32 and warn if the user asked for fp16/mixed.
+    requested_amp = precision in ["fp16", "mixed"]
+    use_amp = requested_amp and device.type == "cuda"
+    if requested_amp and not use_amp:
+        print(f"Warning: {precision} AMP requested but device is {device.type}; running FP32")
+    scaler = GradScaler('cuda') if use_amp else None
     
     # Create model
     num_classes = 100  # Use smaller number of classes for faster training
@@ -296,19 +308,27 @@ def benchmark_training(model_name, training_mode, precision, batch_size, num_epo
         print(f"\nEpoch {epoch + 1}/{num_epochs}")
         
         # Training
-        start_time = time.time()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        start_time = time.perf_counter()
         train_loss, train_acc, avg_train_batch_time = train_epoch(
             model, train_loader, criterion, optimizer, scaler, device, use_amp
         )
-        train_time = time.time() - start_time
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        train_time = time.perf_counter() - start_time
         total_train_time += train_time
         
         # Validation
-        start_time = time.time()
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        start_time = time.perf_counter()
         val_loss, val_acc, avg_val_batch_time = validate_epoch(
             model, val_loader, criterion, device, use_amp
         )
-        val_time = time.time() - start_time
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        val_time = time.perf_counter() - start_time
         total_val_time += val_time
         
         if val_acc > best_val_acc:

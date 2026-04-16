@@ -10,8 +10,6 @@ import sys
 import numpy as np
 from pathlib import Path
 
-torch.autograd.set_detect_anomaly(True)
-torch.set_printoptions(profile="full")
 torch.set_flush_denormal(True)
 
 # Add project root to path for utils import
@@ -40,7 +38,7 @@ def synchronize_device(device=None):
     if device is None:
         device = get_device()
     if device.type == "cuda":
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(device)
     elif device.type == "mps":
         if hasattr(torch.mps, 'synchronize'):
             torch.mps.synchronize()
@@ -122,13 +120,6 @@ def run_inference(args):
             model = model.to(device)
         model.eval()
         
-        # Memory optimization for larger batch sizes
-        if is_deepseek and args.batch_size > 1:
-            # Enable gradient checkpointing to save memory
-            if hasattr(model, 'gradient_checkpointing_enable'):
-                model.gradient_checkpointing_enable()
-                print(f"Enabled gradient checkpointing for batch size {args.batch_size}")
-        
         # Set pad token if not present (LLAMA models often don't have pad tokens)
         if tokenizer.pad_token_id is None:
             tokenizer.add_special_tokens({'pad_token': tokenizer.eos_token})
@@ -159,107 +150,95 @@ def run_inference(args):
         # Get initial GPU memory
         initial_memory = get_gpu_memory_efficient()
         
-        # Warmup runs
+        # Import shared benchmark utilities
+        from utils.benchmark_utils import BenchmarkTimer, compute_stats, reset_memory_tracking, measure_peak_memory, gc_disabled, setup_torch_backends
+        setup_torch_backends(cudnn_benchmark=True)
+        
+        max_tokens = 30 if args.batch_size > 1 else 50
+        
+        # Warmup with same token count as benchmark for consistent KV cache behavior
         print("Warming up...")
-        for _ in range(3):
+        for _ in range(5):
             prompt = prompts[0]
             inputs = tokenizer(
                 prompt, 
-                padding=True,           # pad to longest in batch
+                padding=True,
                 truncation=True,
                 return_tensors="pt"
             )
             inputs = {k: v.to(device) for k, v in inputs.items()}
             
-            with torch.no_grad():                   
+            with torch.inference_mode():
                 _ = model.generate(
                     **inputs,
-                    max_new_tokens=20, 
+                    max_new_tokens=max_tokens,
                     num_return_sequences=1,
                     pad_token_id=tokenizer.pad_token_id,
                     do_sample=False
                 )
             synchronize_device(device)
         
-        # Benchmark runs
+        # Reset peak memory after warmup
+        reset_memory_tracking(device)
+        
+        # Benchmark runs — use at least 5 runs for LLMs
         print("Running benchmark...")
         inference_times = []
         tokens_generated = []
         
-        # Reduce number of runs for LLAMA models (they're slower)
-        num_runs = max(1, 5 // args.batch_size)
+        num_runs = max(10, 20 // args.batch_size)
+        timer = BenchmarkTimer(device)
         
-        for i in range(num_runs):
-            # Create batch of prompts
-            batch_prompts = [prompts[j % len(prompts)] for j in range(args.batch_size)]
-            
-            # Tokenize batch
-            inputs = tokenizer(
-                batch_prompts, 
-                padding=True,           # pad to longest in batch
-                truncation=True,
-                return_tensors="pt"
-            )
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            
-            # Time the inference
-            synchronize_device(device)
-            start_time = time.time()
-            
-            with torch.no_grad():
-                if is_deepseek:
-                    # DeepSeek specific generation parameters
-                    # Reduce tokens for larger batch sizes to save memory
-                    max_tokens = 30 if args.batch_size > 1 else 50
+        with gc_disabled():
+            for i in range(num_runs):
+                batch_prompts = [prompts[j % len(prompts)] for j in range(args.batch_size)]
+                
+                inputs = tokenizer(
+                    batch_prompts, 
+                    padding=True,
+                    truncation=True,
+                    return_tensors="pt"
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                
+                timer.start()
+                
+                with torch.inference_mode():
                     outputs = model.generate(
                         **inputs,
                         max_new_tokens=max_tokens,
                         num_return_sequences=1,
                         pad_token_id=tokenizer.pad_token_id,
                         do_sample=False,
-                        top_p=0.95,
                     )
-                else:
-                    # Standard LLaMA generation
-                    max_tokens = 30 if args.batch_size > 1 else 50
-                    outputs = model.generate(
-                        **inputs,
-                        max_new_tokens=max_tokens,
-                        num_return_sequences=1,
-                        pad_token_id=tokenizer.pad_token_id,
-                        do_sample=False
-                    )
-            
-            synchronize_device(device)
-            end_time = time.time()
-            
-            inference_time = end_time - start_time
-            inference_times.append(inference_time)
-            
-            # Count tokens generated (difference from input)
-            input_length = inputs["input_ids"].shape[1]
-            output_length = outputs.shape[1]
-            tokens_gen = (output_length - input_length) * args.batch_size
-            tokens_generated.append(tokens_gen)
-            
-            if (i + 1) % 5 == 0:  # Report less frequently for slower models
-                print(f"Completed {i+1}/{num_runs} runs")
+                
+                elapsed_ms = timer.stop()
+                inference_times.append(elapsed_ms)
+                
+                input_length = inputs["input_ids"].shape[1]
+                output_length = outputs.shape[1]
+                tokens_gen = (output_length - input_length) * args.batch_size
+                tokens_generated.append(tokens_gen)
+                
+                if (i + 1) % 5 == 0:
+                    print(f"Completed {i+1}/{num_runs} runs")
         
-        # Get final GPU memory
+        # Get memory stats
+        peak_mem = measure_peak_memory(device)
         final_memory = get_gpu_memory_efficient()
         
-        # Calculate metrics
-        inference_times = np.array(inference_times)
-        avg_latency = np.mean(inference_times)
-        min_latency = np.min(inference_times)
-        max_latency = np.max(inference_times)
-        std_latency = np.std(inference_times)
+        # Calculate metrics using shared stats
+        stats = compute_stats(inference_times)
+        avg_latency = stats["mean"] / 1000.0  # seconds
+        min_latency = stats["min"] / 1000.0
+        max_latency = stats["max"] / 1000.0
+        std_latency = stats["std"] / 1000.0
         
-        per_sample_latency = (avg_latency * 1000) / args.batch_size  # ms per sample
-        throughput = args.batch_size / avg_latency  # samples per second
+        per_sample_latency = stats["mean"] / args.batch_size
+        throughput = args.batch_size / avg_latency if avg_latency > 0 else 0
         
         total_tokens = sum(tokens_generated)
-        total_time = sum(inference_times)
+        total_time = sum(t / 1000.0 for t in inference_times)
         tokens_per_second = total_tokens / total_time if total_time > 0 else 0
         avg_tokens_per_run = np.mean(tokens_generated)
         
@@ -270,8 +249,12 @@ def run_inference(args):
         print(f"Precision: {args.precision}")
         print(f"Batch size: {args.batch_size}")
         print(f"Number of runs: {num_runs}")
-        print(f"Average Inference Time: {avg_latency*1000:.2f} ms")
+        print(f"Average Inference Time: {stats['mean']:.2f} ms")
         print(f"Per-sample Latency: {per_sample_latency:.2f} ms/sample")
+        print(f"Median Inference Time: {stats['median']:.2f} ms")
+        print(f"P90 Inference Time: {stats['p90']:.2f} ms")
+        print(f"P95 Inference Time: {stats['p95']:.2f} ms")
+        print(f"P99 Inference Time: {stats['p99']:.2f} ms")
         print(f"Min Inference Time: {min_latency*1000:.2f} ms")
         print(f"Max Inference Time: {max_latency*1000:.2f} ms")
         print(f"Std Inference Time: {std_latency*1000:.2f} ms")
@@ -280,17 +263,15 @@ def run_inference(args):
         print(f"Average tokens per run: {avg_tokens_per_run:.1f}")
         
         # Memory information
+        if peak_mem:
+            print(f"GPU Memory Allocated: {peak_mem.get('peak_allocated_gb', 0):.2f} GB")
+            print(f"GPU Memory Cached: {peak_mem.get('peak_reserved_gb', 0):.2f} GB")
         if final_memory:
             total_memory_used = final_memory.get('total_gpu_used_gb', 0)
-            total_memory_available = final_memory.get('total_gpu_total_gb', 0)
-            gpu_utilization = final_memory.get('gpu_utilization_percent', 0)
-            
             print(f"Total GPU Memory Used: {total_memory_used:.2f} GB")
-            print(f"Total GPU Memory Available: {total_memory_available:.2f} GB")
-            print(f"GPU Memory Utilization: {gpu_utilization:.1f}%")
         
         # Framework compatibility output (expected by benchmark runner)
-        print(f"PyTorch Inference Time = {avg_latency*1000:.2f} ms")
+        print(f"PyTorch Inference Time = {stats['mean']:.2f} ms")
         
         return {
             "avg_latency_ms": avg_latency * 1000,

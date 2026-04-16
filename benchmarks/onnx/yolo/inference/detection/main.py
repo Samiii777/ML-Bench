@@ -15,6 +15,14 @@ import subprocess
 import tempfile
 import torch
 
+def _synchronize_gpu():
+    """Synchronize GPU for accurate timing with ONNX GPU providers"""
+    try:
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+    except Exception:
+        pass
+
 # Add project root to path for utils import
 project_root = Path(__file__).resolve()
 for parent in project_root.parents:
@@ -300,19 +308,29 @@ def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_p
         initial_memory = get_gpu_memory_usage()
         print(f"Initial GPU memory: {initial_memory:.2f} GB")
         
+        # Check if we're using a GPU provider
+        actual_providers = session.get_providers()
+        is_gpu_provider = any(p in str(actual_providers) for p in ['CUDA', 'Tensorrt', 'ROCm', 'MIGraphX'])
+        
         # Warmup
         print(f"\nRunning {num_warmup} warmup iterations...")
         for i in range(num_warmup):
             _ = session.run(output_names, {input_name: input_data})
+        if is_gpu_provider:
+            _synchronize_gpu()
         
         # Benchmark
         print(f"\nRunning {num_runs} benchmark iterations...")
         latencies = []
         
         for i in range(num_runs):
-            start_time = time.time()
+            if is_gpu_provider:
+                _synchronize_gpu()
+            start_time = time.perf_counter()
             results = session.run(output_names, {input_name: input_data})
-            end_time = time.time()
+            if is_gpu_provider:
+                _synchronize_gpu()
+            end_time = time.perf_counter()
             
             latency = end_time - start_time
             latencies.append(latency)

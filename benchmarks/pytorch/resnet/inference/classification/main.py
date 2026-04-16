@@ -163,6 +163,10 @@ def run_inference(params):
     categories = load_categories(classes_file)
     print(f"Loading model: {resnet_model}")
     
+    # Configure backends for benchmarking
+    from utils.benchmark_utils import setup_torch_backends, maybe_compile
+    setup_torch_backends(cudnn_benchmark=True)
+    
     # Load model
     model = torch.hub.load('pytorch/vision:v0.10.0', resnet_model, weights=model_weights[resnet_model])
     model.eval()
@@ -207,60 +211,52 @@ def run_inference(params):
     elif params.precision == "int8":
         print("Warning: INT8 quantization not implemented in this benchmark")
     
-    # Warm-up runs
-    print("Performing warm-up runs...")
-    with torch.no_grad():
-        for _ in range(3):
+    # Import shared benchmark utilities
+    from utils.benchmark_utils import BenchmarkTimer, benchmark_loop, warmup, compute_stats, reset_memory_tracking, measure_peak_memory
+    
+    # Define one inference step
+    def inference_step():
+        with torch.inference_mode():
             if use_mixed_precision:
                 with torch.cuda.amp.autocast():
-                    output = model(input_batch)
+                    return model(input_batch)
             else:
-                output = model(input_batch)
-            synchronize()
+                return model(input_batch)
     
-    # Measure memory after warmup
-    warmup_memory = get_gpu_memory_nvidia_smi()
+    # Warmup
+    warmup(inference_step, num_warmup=5, device=device)
     
-    # Benchmark runs
-    print("Running benchmark...")
-    latencies = []
-    num_runs = 10
+    # Reset peak memory after warmup for clean benchmark-only measurement
+    reset_memory_tracking(device)
     
-    for i in range(num_runs):
-        synchronize()
-        start = time.time()
-        with torch.no_grad():
-            if use_mixed_precision:
-                with torch.cuda.amp.autocast():
-                    output = model(input_batch)
-            else:
-                output = model(input_batch)
-        synchronize()
-        latency = time.time() - start
-        latencies.append(latency)
-        print(f"Run {i+1}/{num_runs}: {latency*1000:.2f} ms")
+    # Benchmark runs with CUDA Events timing and GC disabled
+    num_runs = 20
+    latencies_ms = benchmark_loop(inference_step, num_runs=num_runs, device=device)
     
-    # Calculate statistics
-    avg_latency = sum(latencies) / len(latencies)
-    min_latency = min(latencies)
-    max_latency = max(latencies)
-    std_latency = np.std(latencies)
+    # Measure peak memory (only covers the benchmark runs, not warmup)
+    peak_mem = measure_peak_memory(device)
     
-    # Calculate throughput (samples per second)
-    throughput = params.batch_size / avg_latency
-    
-    # Calculate per-sample latency
-    per_sample_latency = avg_latency * 1000 / params.batch_size  # ms per sample
-    
-    # Measure final memory usage
+    # Also get nvidia-smi as secondary reference
     final_memory = get_gpu_memory_nvidia_smi()
     
-    # Get predictions for the first image in batch (ensure output is in FP32 for softmax)
-    if use_mixed_precision or params.precision == "fp16":
-        output_fp32 = output.float()
-    else:
-        output_fp32 = output
+    # Compute comprehensive statistics
+    stats = compute_stats(latencies_ms)
+    avg_latency = stats["mean"] / 1000.0  # seconds for backward compat
+    min_latency = stats["min"] / 1000.0
+    max_latency = stats["max"] / 1000.0
+    std_latency = stats["std"] / 1000.0
+    throughput = params.batch_size / avg_latency if avg_latency > 0 else 0
+    per_sample_latency = stats["mean"] / params.batch_size
     
+    # Run one extra forward pass to get predictions for display
+    with torch.inference_mode():
+        if use_mixed_precision:
+            with torch.cuda.amp.autocast():
+                output = model(input_batch)
+        else:
+            output = model(input_batch)
+    
+    output_fp32 = output.float() if (use_mixed_precision or params.precision == "fp16") else output
     probabilities = torch.nn.functional.softmax(output_fp32[0], dim=0)
     top5_prob, top5_catid = torch.topk(probabilities, 5)
     
@@ -277,18 +273,23 @@ def run_inference(params):
     print(f"Device: {device}")
     print(f"Precision: {params.precision}")
     print(f"Batch size: {params.batch_size}")
-    print(f"Average Inference Time: {avg_latency*1000:.2f} ms")
+    print(f"Average Inference Time: {stats['mean']:.2f} ms")
     print(f"Per-sample Latency: {per_sample_latency:.2f} ms/sample")
+    print(f"Median Inference Time: {stats['median']:.2f} ms")
+    print(f"P90 Inference Time: {stats['p90']:.2f} ms")
+    print(f"P95 Inference Time: {stats['p95']:.2f} ms")
+    print(f"P99 Inference Time: {stats['p99']:.2f} ms")
     print(f"Min Inference Time: {min_latency*1000:.2f} ms")
     print(f"Max Inference Time: {max_latency*1000:.2f} ms")
     print(f"Std Inference Time: {std_latency*1000:.2f} ms")
     print(f"Throughput: {throughput:.2f} samples/sec")
     
-    # Memory information
+    # Memory information (PyTorch allocator peak is primary, nvidia-smi is secondary)
+    if peak_mem:
+        print(f"GPU Memory Allocated: {peak_mem.get('peak_allocated_gb', 0):.3f} GB")
+        print(f"GPU Memory Cached: {peak_mem.get('peak_reserved_gb', 0):.3f} GB")
     if final_memory:
         print(f"Total GPU Memory Used: {final_memory.get('total_gpu_used_gb', 0):.3f} GB")
-        print(f"Total GPU Memory Available: {final_memory.get('total_gpu_total_gb', 0):.3f} GB")
-        print(f"GPU Memory Utilization: {final_memory.get('gpu_utilization_percent', 0):.1f}%")
     
     print(f"PyTorch Inference Time = {avg_latency*1000:.2f} ms")
     

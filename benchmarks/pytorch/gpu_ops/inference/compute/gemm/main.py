@@ -59,14 +59,15 @@ def benchmark_operation(operation_func, *args, num_warmup=5, num_runs=20, **kwar
     times = []
     for _ in range(num_runs):
         synchronize()
-        start = time.time()
+        start = time.perf_counter()
         result = operation_func(*args, **kwargs)
         synchronize()
-        end = time.time()
+        end = time.perf_counter()
         times.append((end - start) * 1000)  # Convert to milliseconds
     
     return {
         "avg_time_ms": np.mean(times),
+        "median_time_ms": float(np.median(times)),
         "min_time_ms": np.min(times),
         "max_time_ms": np.max(times),
         "std_time_ms": np.std(times),
@@ -124,7 +125,8 @@ def run_gemm_benchmark(precision="fp32"):
         flops = 2 * m * k * n  # 2 operations per multiply-add
         gflops = flops / (result["avg_time_ms"] * 1e6)  # GFLOPS
         
-        print(f"  Average time: {result['avg_time_ms']:.2f} ms")
+        print(f"  Average time: {result['avg_time_ms']:.2f} ms (median: {result['median_time_ms']:.2f} ms)")
+        print(f"  Min/Max: {result['min_time_ms']:.2f} / {result['max_time_ms']:.2f} ms, Std: {result['std_time_ms']:.2f} ms")
         print(f"  Performance: {gflops:.2f} GFLOPS")
         print(f"  Memory: {(A.numel() + B.numel() + m*n) * A.element_size() / 1024**3:.3f} GB")
         

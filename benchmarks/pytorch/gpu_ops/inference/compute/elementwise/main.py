@@ -60,14 +60,15 @@ def benchmark_operation(operation_func, *args, num_warmup=5, num_runs=20, **kwar
     times = []
     for _ in range(num_runs):
         synchronize()
-        start = time.time()
+        start = time.perf_counter()
         result = operation_func(*args, **kwargs)
         synchronize()
-        end = time.time()
+        end = time.perf_counter()
         times.append((end - start) * 1000)  # Convert to milliseconds
     
     return {
         "avg_time_ms": np.mean(times),
+        "median_time_ms": float(np.median(times)),
         "min_time_ms": np.min(times),
         "max_time_ms": np.max(times),
         "std_time_ms": np.std(times),
@@ -149,7 +150,7 @@ def run_elementwise_benchmark(precision="fp32"):
             
             bandwidth_gbs = total_bytes / (result["avg_time_ms"] * 1e6)
             
-            print(f"  {op_name:10s}: {result['avg_time_ms']:6.2f} ms, {bandwidth_gbs:6.1f} GB/s")
+            print(f"  {op_name:10s}: {result['avg_time_ms']:6.2f} ms (med: {result['median_time_ms']:.2f}), {bandwidth_gbs:6.1f} GB/s")
             
             # Only track best performance from massive tensors (1000MB+) to avoid cache effects
             tensor_size_mb = (elements * bytes_per_element) / (1024 * 1024)

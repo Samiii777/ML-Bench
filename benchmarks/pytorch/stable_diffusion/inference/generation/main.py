@@ -470,132 +470,117 @@ def run_single_model_benchmark(model_config, params, device=None):
     prompt = test_prompts[0] if not params.custom_prompt else params.custom_prompt
     print(f"Test prompt: '{prompt}'")
     
-    # Warm-up runs
-    print("Performing warm-up runs...")
-    for i in range(2):
-        print(f"Warm-up {i+1}/2...")
-        with torch.no_grad():
-            if params.precision == "mixed" and device.type == "cuda":
+    # Import shared benchmark utilities
+    from utils.benchmark_utils import (
+        BenchmarkTimer, compute_stats, gc_disabled,
+        reset_memory_tracking, measure_peak_memory, setup_torch_backends
+    )
+    setup_torch_backends(cudnn_benchmark=True)
+    
+    # Determine guidance scale for this model
+    def _guidance_scale():
+        if model_type == 'sd3':
+            return params.guidance_scale
+        elif model_type == 'sd3_turbo':
+            return 1.0
+        elif model_type == 'flux_schnell':
+            return 0.0
+        elif model_type == 'flux_dev':
+            return params.guidance_scale
+        else:
+            return 7.5
+    
+    use_mixed = params.precision == "mixed" and device.type == "cuda"
+    guidance = _guidance_scale()
+    
+    # Warmup with same step count as benchmark for consistent behavior
+    print(f"Performing warm-up runs (5 iterations, {params.num_inference_steps} steps)...")
+    for i in range(5):
+        print(f"Warm-up {i+1}/5...")
+        with torch.inference_mode():
+            gen_kwargs = {
+                'prompt': prompt,
+                'height': params.height,
+                'width': params.width,
+                'num_inference_steps': params.num_inference_steps,
+                'guidance_scale': guidance,
+                'num_images_per_prompt': 1
+            }
+            if use_mixed:
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    _ = pipeline(
-                        prompt,
-                        height=params.height,
-                        width=params.width,
-                        num_inference_steps=10,  # Fewer steps for warmup
-                        guidance_scale=params.guidance_scale if model_type == 'sd3' else (1.0 if model_type == 'sd3_turbo' else (0.0 if model_type == 'flux_schnell' else (params.guidance_scale if model_type == 'flux_dev' else 7.5))),
-                        num_images_per_prompt=1
-                    ).images
+                    _ = pipeline(**gen_kwargs).images
             else:
-                generation_kwargs = {
-                    'prompt': prompt,
-                    'height': params.height,
-                    'width': params.width,
-                    'num_inference_steps': 10,  # Fewer steps for warmup
-                    'num_images_per_prompt': 1
-                }
-                
-                # Add guidance_scale based on model type
-                if model_type == 'sd3':
-                    generation_kwargs['guidance_scale'] = params.guidance_scale
-                elif model_type == 'sd3_turbo':
-                    generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
-                elif model_type == 'flux_schnell':
-                    generation_kwargs['guidance_scale'] = 0.0  # No guidance for FLUX Schnell
-                elif model_type == 'flux_dev':
-                    generation_kwargs['guidance_scale'] = params.guidance_scale  # Full guidance for FLUX Dev
-                else:
-                    generation_kwargs['guidance_scale'] = 7.5
-                
-                _ = pipeline(**generation_kwargs).images
+                _ = pipeline(**gen_kwargs).images
         
-        synchronize()
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        elif device.type == "mps" and hasattr(torch.mps, "synchronize"):
+            torch.mps.synchronize()
     
     print("Warm-up completed. Starting benchmark...")
     
-    # Benchmark runs
-    times = []
+    # Reset peak memory after warmup for clean benchmark-only measurement
+    reset_memory_tracking(device)
+    
+    # Benchmark runs — enforce a minimum sample size for meaningful statistics
+    num_runs = max(params.num_runs, 10)
+    timer = BenchmarkTimer(device)
+    times_ms = []
     all_images = []
     
-    for run in range(params.num_runs):
-        print(f"Benchmark run {run + 1}/{params.num_runs}")
-        
-        # Prepare batch prompts
-        batch_prompts = [prompt] * params.batch_size
-        
-        synchronize()
-        start_time = time.time()
-        
-        with torch.no_grad():
-            if params.precision == "mixed" and device.type == "cuda":
-                with torch.autocast(device_type="cuda", dtype=torch.float16):
-                    generation_kwargs = {
-                        'prompt': batch_prompts,
-                        'height': params.height,
-                        'width': params.width,
-                        'num_inference_steps': params.num_inference_steps,
-                        'num_images_per_prompt': 1
-                    }
-                    
-                    # Add guidance_scale based on model type
-                    if model_type == 'sd3':
-                        generation_kwargs['guidance_scale'] = params.guidance_scale
-                    elif model_type == 'sd3_turbo':
-                        generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
-                    elif model_type == 'flux_schnell':
-                        generation_kwargs['guidance_scale'] = 0.0  # No guidance for FLUX Schnell
-                    else:
-                        generation_kwargs['guidance_scale'] = 7.5
-                    
-                    result = pipeline(**generation_kwargs)
-            else:
-                generation_kwargs = {
-                    'prompt': batch_prompts,
-                    'height': params.height,
-                    'width': params.width,
-                    'num_inference_steps': params.num_inference_steps,
-                    'num_images_per_prompt': 1
-                }
-                
-                # Add guidance_scale based on model type
-                if model_type == 'sd3':
-                    generation_kwargs['guidance_scale'] = params.guidance_scale
-                elif model_type == 'sd3_turbo':
-                    generation_kwargs['guidance_scale'] = 1.0  # Optimized for turbo
-                elif model_type == 'flux_schnell':
-                    generation_kwargs['guidance_scale'] = 0.0  # No guidance for FLUX Schnell
-                elif model_type == 'flux_dev':
-                    generation_kwargs['guidance_scale'] = params.guidance_scale  # Full guidance for FLUX Dev
+    print(f"Benchmarking ({num_runs} iterations)...")
+    with gc_disabled():
+        for run in range(num_runs):
+            batch_prompts = [prompt] * params.batch_size
+            
+            gen_kwargs = {
+                'prompt': batch_prompts,
+                'height': params.height,
+                'width': params.width,
+                'num_inference_steps': params.num_inference_steps,
+                'guidance_scale': guidance,
+                'num_images_per_prompt': 1
+            }
+            
+            timer.start()
+            
+            with torch.inference_mode():
+                if use_mixed:
+                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+                        result = pipeline(**gen_kwargs)
                 else:
-                    generation_kwargs['guidance_scale'] = 7.5
-                
-                result = pipeline(**generation_kwargs)
-        
-        synchronize()
-        end_time = time.time()
-        
-        run_time = end_time - start_time
-        times.append(run_time)
-        
-        # Store images from first run for saving
-        if run == 0:
-            all_images = result.images
-        
-        images_per_second = params.batch_size / run_time
-        time_per_image = run_time / params.batch_size
-        
-        print(f"  Time: {run_time:.2f}s | Images/sec: {images_per_second:.2f} | Time/image: {time_per_image:.2f}s")
+                    result = pipeline(**gen_kwargs)
+            
+            elapsed_ms = timer.stop()
+            times_ms.append(elapsed_ms)
+            
+            if run == 0:
+                all_images = result.images
     
-    # Calculate statistics
-    avg_time = np.mean(times)
-    std_time = np.std(times)
-    min_time = np.min(times)
-    max_time = np.max(times)
+    # Print per-run summary AFTER the timed loop (out of band, no host overhead impact)
+    for idx, elapsed_ms in enumerate(times_ms):
+        run_time_s = elapsed_ms / 1000.0
+        images_per_second = params.batch_size / run_time_s
+        time_per_image = run_time_s / params.batch_size
+        print(f"  Run {idx + 1}/{num_runs}: {run_time_s:.2f}s | {images_per_second:.2f} img/s | {time_per_image:.2f}s/img")
+    
+    # Measure peak memory (only covers the benchmark runs, not warmup)
+    peak_mem = measure_peak_memory(device)
+    
+    # Compute comprehensive statistics (in milliseconds)
+    stats = compute_stats(times_ms)
+    
+    # Convert to seconds for display
+    avg_time = stats["mean"] / 1000.0
+    std_time = stats["std"] / 1000.0
+    min_time = stats["min"] / 1000.0
+    max_time = stats["max"] / 1000.0
     
     avg_images_per_second = params.batch_size / avg_time
     avg_time_per_image = avg_time / params.batch_size
     avg_latency_ms = avg_time_per_image * 1000  # Convert to milliseconds
     
-    # Measure final memory
+    # Measure final memory (nvidia-smi as secondary reference)
     final_memory = get_gpu_memory_nvidia_smi()
     
     # Print results in both human-readable and parseable formats
@@ -608,20 +593,25 @@ def run_single_model_benchmark(model_config, params, device=None):
     print(f"Batch size: {params.batch_size}")
     print(f"Image size: {params.height}x{params.width}")
     print(f"Inference steps: {params.num_inference_steps}")
-    if model_type == 'sd3':
-        print(f"Guidance scale: {params.guidance_scale}")
-    print(f"Number of runs: {params.num_runs}")
+    print(f"Guidance scale: {guidance}")
+    print(f"Number of runs: {num_runs}")
     print()
     print(f"Average time per run: {avg_time:.3f} ± {std_time:.3f} seconds")
+    print(f"Median time per run: {stats['median']/1000:.3f} seconds")
+    print(f"P90 time: {stats['p90']/1000:.3f} seconds")
+    print(f"P95 time: {stats['p95']/1000:.3f} seconds")
+    print(f"P99 time: {stats['p99']/1000:.3f} seconds")
     print(f"Min time: {min_time:.3f} seconds")
     print(f"Max time: {max_time:.3f} seconds")
     print(f"Average images per second: {avg_images_per_second:.2f}")
     print(f"Average time per image: {avg_time_per_image:.3f} seconds")
     
-    # Memory information
+    # Memory information (PyTorch allocator peak is primary)
+    if peak_mem:
+        print(f"\nGPU Memory Allocated: {peak_mem.get('peak_allocated_gb', 0):.2f} GB")
+        print(f"GPU Memory Cached: {peak_mem.get('peak_reserved_gb', 0):.2f} GB")
     if final_memory:
-        print(f"\nMemory usage: {final_memory['total_gpu_used_gb']:.2f} GB")
-        print(f"GPU utilization: {final_memory['gpu_utilization_percent']:.1f}%")
+        print(f"Total GPU Memory Used (nvidia-smi): {final_memory['total_gpu_used_gb']:.2f} GB")
     
     # Output in format expected by benchmark framework
     print(f"\n# Benchmark Framework Parseable Output for {display_name}")
@@ -659,15 +649,19 @@ def run_single_model_benchmark(model_config, params, device=None):
         'batch_size': params.batch_size,
         'image_size': f"{params.height}x{params.width}",
         'inference_steps': params.num_inference_steps,
-        'guidance_scale': params.guidance_scale if model_type == 'sd3' else 7.5,
-        'num_runs': params.num_runs,
+        'guidance_scale': guidance,
+        'num_runs': num_runs,
         'avg_time': avg_time,
         'std_time': std_time,
         'min_time': min_time,
         'max_time': max_time,
+        'median_time': stats['median'] / 1000.0,
+        'p90_time': stats['p90'] / 1000.0,
+        'p95_time': stats['p95'] / 1000.0,
+        'p99_time': stats['p99'] / 1000.0,
         'avg_images_per_second': avg_images_per_second,
         'avg_time_per_image': avg_time_per_image,
-        'memory_usage_gb': final_memory['total_gpu_used_gb'] if final_memory else None,
+        'memory_usage_gb': peak_mem.get('peak_allocated_gb', None) if peak_mem else (final_memory['total_gpu_used_gb'] if final_memory else None),
         'gpu_utilization_percent': final_memory['gpu_utilization_percent'] if final_memory else None
     }
 
@@ -814,8 +808,8 @@ def main():
                         help='Guidance scale for SD3 (default: 4.5)')
     
     # Benchmark settings
-    parser.add_argument('--num-runs', type=int, default=5,
-                        help='Number of benchmark runs (default: 5)')
+    parser.add_argument('--num-runs', type=int, default=10,
+                        help='Number of benchmark runs (default: 10)')
     
     # Memory optimization
     parser.add_argument('--cpu-offload', action='store_true',

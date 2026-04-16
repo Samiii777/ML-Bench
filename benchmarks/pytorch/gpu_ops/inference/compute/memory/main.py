@@ -59,14 +59,15 @@ def benchmark_operation(operation_func, *args, num_warmup=5, num_runs=20, **kwar
     times = []
     for _ in range(num_runs):
         synchronize()
-        start = time.time()
+        start = time.perf_counter()
         result = operation_func(*args, **kwargs)
         synchronize()
-        end = time.time()
+        end = time.perf_counter()
         times.append((end - start) * 1000)  # Convert to milliseconds
     
     return {
         "avg_time_ms": np.mean(times),
+        "median_time_ms": float(np.median(times)),
         "min_time_ms": np.min(times),
         "max_time_ms": np.max(times),
         "std_time_ms": np.std(times),
@@ -125,7 +126,7 @@ def run_memory_benchmark(precision="fp32"):
         bytes_total = src.numel() * src.element_size() * 2  # read + write
         bandwidth_gbs = bytes_total / (result["avg_time_ms"] * 1e6)
         
-        print(f"  Copy:      {result['avg_time_ms']:6.2f} ms, {bandwidth_gbs:6.1f} GB/s")
+        print(f"  Copy:      {result['avg_time_ms']:6.2f} ms (med: {result['median_time_ms']:.2f}), {bandwidth_gbs:6.1f} GB/s")
         
         # Only track best performance from massive tensors (1000MB+) to avoid cache effects
         tensor_size_mb = (src.numel() * src.element_size()) / (1024 * 1024)
@@ -143,7 +144,7 @@ def run_memory_benchmark(precision="fp32"):
         result = benchmark_operation(transpose_contiguous_op)
         bandwidth_gbs = bytes_total / (result["avg_time_ms"] * 1e6)
         
-        print(f"  Transpose: {result['avg_time_ms']:6.2f} ms, {bandwidth_gbs:6.1f} GB/s")
+        print(f"  Transpose: {result['avg_time_ms']:6.2f} ms (med: {result['median_time_ms']:.2f}), {bandwidth_gbs:6.1f} GB/s")
         
         # Only track best performance from massive tensors (1000MB+) to avoid cache effects
         if tensor_size_mb >= 1000 and bandwidth_gbs > best_bandwidth:
@@ -163,7 +164,7 @@ def run_memory_benchmark(precision="fp32"):
         bytes_total_write = src.numel() * src.element_size()  # write only
         bandwidth_gbs = bytes_total_write / (result["avg_time_ms"] * 1e6)
         
-        print(f"  Fill:      {result['avg_time_ms']:6.2f} ms, {bandwidth_gbs:6.1f} GB/s")
+        print(f"  Fill:      {result['avg_time_ms']:6.2f} ms (med: {result['median_time_ms']:.2f}), {bandwidth_gbs:6.1f} GB/s")
         
         # Only track best performance from massive tensors (1000MB+) to avoid cache effects
         if tensor_size_mb >= 1000 and bandwidth_gbs > best_bandwidth:
@@ -180,7 +181,7 @@ def run_memory_benchmark(precision="fp32"):
         result = benchmark_operation(add_op)
         bandwidth_gbs = bytes_total / (result["avg_time_ms"] * 1e6)
         
-        print(f"  Add:       {result['avg_time_ms']:6.2f} ms, {bandwidth_gbs:6.1f} GB/s")
+        print(f"  Add:       {result['avg_time_ms']:6.2f} ms (med: {result['median_time_ms']:.2f}), {bandwidth_gbs:6.1f} GB/s")
         
         # Only track best performance from massive tensors (1000MB+) to avoid cache effects
         if tensor_size_mb >= 1000 and bandwidth_gbs > best_bandwidth:

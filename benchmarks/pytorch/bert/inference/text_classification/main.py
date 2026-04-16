@@ -37,7 +37,7 @@ def synchronize_device(device=None):
     if device is None:
         device = get_device()
     if device.type == "cuda":
-        torch.cuda.synchronize()
+        torch.cuda.synchronize(device)
     elif device.type == "mps":
         if hasattr(torch.mps, 'synchronize'):
             torch.mps.synchronize()
@@ -96,7 +96,10 @@ def get_sample_texts():
 def run_inference(args):
     """Run BERT text classification inference benchmark"""
     
-    device = get_device()
+    if args.device == 'auto':
+        device = get_device()
+    else:
+        device = torch.device(args.device)
     model_name = get_bert_model_name(args.model)
     
     print(f"Running BERT Text Classification Benchmark")
@@ -137,85 +140,85 @@ def run_inference(args):
         # Get initial GPU memory
         initial_memory = get_gpu_memory_efficient()
         
-        # Warmup runs
+        # Import shared benchmark utilities
+        from utils.benchmark_utils import BenchmarkTimer, compute_stats, reset_memory_tracking, measure_peak_memory, gc_disabled, setup_torch_backends
+        setup_torch_backends(cudnn_benchmark=True)
+        
+        use_mixed = args.precision == "mixed" and device.type == "cuda"
+        
+        # Warmup with batch-sized input (matching benchmark workload)
         print("Warming up...")
-        for _ in range(3):
-            text = sample_texts[0]
-            inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        for _ in range(5):
+            batch_texts = [sample_texts[j % len(sample_texts)] for j in range(args.batch_size)]
+            inputs = tokenizer(batch_texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
             inputs = {k: v.to(device) for k, v in inputs.items()}
             
-            with torch.no_grad():
-                if args.precision == "mixed" and device.type == "cuda":
+            with torch.inference_mode():
+                if use_mixed:
                     with torch.autocast(device_type="cuda", dtype=torch.float16):
                         outputs = model(**inputs)
                 else:
                     outputs = model(**inputs)
-                
-                # Get predictions
-                predictions = F.softmax(outputs.logits, dim=-1)
             
             synchronize_device(device)
+        
+        # Reset peak memory after warmup
+        reset_memory_tracking(device)
         
         # Benchmark runs
         print("Running benchmark...")
-        inference_times = []
+        inference_times_ms = []
         all_predictions = []
         
-        num_runs = max(50, 200 // args.batch_size)  # Adjust runs based on batch size
+        num_runs = max(50, 200 // args.batch_size)
+        timer = BenchmarkTimer(device)
         
-        for i in range(num_runs):
-            # Create batch of texts
-            batch_texts = []
-            for j in range(args.batch_size):
-                text_idx = (i * args.batch_size + j) % len(sample_texts)
-                batch_texts.append(sample_texts[text_idx])
-            
-            # Tokenize batch
-            inputs = tokenizer(
-                batch_texts, 
-                return_tensors="pt", 
-                padding=True, 
-                truncation=True, 
-                max_length=512
-            )
-            inputs = {k: v.to(device) for k, v in inputs.items()}
-            
-            # Time the inference
-            synchronize_device(device)
-            start_time = time.time()
-            
-            with torch.no_grad():
-                if args.precision == "mixed" and device.type == "cuda":
-                    with torch.autocast(device_type="cuda", dtype=torch.float16):
-                        outputs = model(**inputs)
-                else:
-                    outputs = model(**inputs)
+        with gc_disabled():
+            for i in range(num_runs):
+                batch_texts = []
+                for j in range(args.batch_size):
+                    text_idx = (i * args.batch_size + j) % len(sample_texts)
+                    batch_texts.append(sample_texts[text_idx])
                 
-                # Get predictions (probabilities)
-                predictions = F.softmax(outputs.logits, dim=-1)
-                predicted_classes = torch.argmax(predictions, dim=-1)
-            
-            synchronize_device(device)
-            end_time = time.time()
-            
-            inference_time = end_time - start_time
-            inference_times.append(inference_time)
-            
-            # Store predictions for analysis
-            all_predictions.append(predicted_classes.cpu().numpy())
-            
-            if (i + 1) % 20 == 0:
-                print(f"Completed {i+1}/{num_runs} runs")
+                inputs = tokenizer(
+                    batch_texts, 
+                    return_tensors="pt", 
+                    padding=True, 
+                    truncation=True, 
+                    max_length=512
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                
+                timer.start()
+                
+                with torch.inference_mode():
+                    if use_mixed:
+                        with torch.autocast(device_type="cuda", dtype=torch.float16):
+                            outputs = model(**inputs)
+                    else:
+                        outputs = model(**inputs)
+                    
+                    predictions = F.softmax(outputs.logits, dim=-1)
+                    predicted_classes = torch.argmax(predictions, dim=-1)
+                
+                elapsed_ms = timer.stop()
+                inference_times_ms.append(elapsed_ms)
+                
+                all_predictions.append(predicted_classes.cpu().numpy())
+                
+                if (i + 1) % 20 == 0:
+                    print(f"Completed {i+1}/{num_runs} runs")
         
-        # Get final GPU memory
+        # Get memory stats
+        peak_mem = measure_peak_memory(device)
         final_memory = get_gpu_memory_efficient()
         
-        # Calculate metrics
-        inference_times = np.array(inference_times)
-        avg_latency = np.mean(inference_times)
-        min_latency = np.min(inference_times)
-        max_latency = np.max(inference_times)
-        std_latency = np.std(inference_times)
+        # Calculate metrics using shared stats
+        stats = compute_stats(inference_times_ms)
+        avg_latency = stats["mean"] / 1000.0
+        min_latency = stats["min"] / 1000.0
+        max_latency = stats["max"] / 1000.0
+        std_latency = stats["std"] / 1000.0
         
         per_sample_latency = (avg_latency * 1000) / args.batch_size  # ms per sample
         throughput = args.batch_size / avg_latency  # samples per second
@@ -233,8 +236,12 @@ def run_inference(args):
         print(f"Batch size: {args.batch_size}")
         print(f"Number of runs: {num_runs}")
         print(f"Total samples processed: {num_runs * args.batch_size}")
-        print(f"Average Inference Time: {avg_latency*1000:.2f} ms")
+        print(f"Average Inference Time: {stats['mean']:.2f} ms")
         print(f"Per-sample Latency: {per_sample_latency:.2f} ms/sample")
+        print(f"Median Inference Time: {stats['median']:.2f} ms")
+        print(f"P90 Inference Time: {stats['p90']:.2f} ms")
+        print(f"P95 Inference Time: {stats['p95']:.2f} ms")
+        print(f"P99 Inference Time: {stats['p99']:.2f} ms")
         print(f"Min Inference Time: {min_latency*1000:.2f} ms")
         print(f"Max Inference Time: {max_latency*1000:.2f} ms")
         print(f"Std Inference Time: {std_latency*1000:.2f} ms")
@@ -246,16 +253,14 @@ def run_inference(args):
             percentage = (count / len(all_preds)) * 100
             print(f"  Class {cls}: {count} samples ({percentage:.1f}%)")
         
-        # Memory information
+        # Memory information (PyTorch allocator peak is primary)
+        if peak_mem:
+            print(f"\nGPU Memory Usage:")
+            print(f"GPU Memory Allocated: {peak_mem.get('peak_allocated_gb', 0):.2f} GB")
+            print(f"GPU Memory Cached: {peak_mem.get('peak_reserved_gb', 0):.2f} GB")
         if final_memory:
             total_memory_used = final_memory.get('total_gpu_used_gb', 0)
-            total_memory_available = final_memory.get('total_gpu_total_gb', 0)
-            gpu_utilization = final_memory.get('gpu_utilization_percent', 0)
-            
-            print(f"\nGPU Memory Usage:")
             print(f"Total GPU Memory Used: {total_memory_used:.2f} GB")
-            print(f"Total GPU Memory Available: {total_memory_available:.2f} GB")
-            print(f"GPU Memory Utilization: {gpu_utilization:.1f}%")
         
         # Framework compatibility output (expected by benchmark runner)
         print(f"\n# Benchmark Framework Output")
@@ -263,9 +268,11 @@ def run_inference(args):
         print(f"Device: {device}")
         print(f"Throughput: {throughput:.2f} samples/sec")
         print(f"Per-sample Latency: {per_sample_latency:.2f} ms/sample")
-        if final_memory:
+        if peak_mem:
+            print(f"GPU Memory Allocated: {peak_mem.get('peak_allocated_gb', 0):.2f} GB")
+        elif final_memory:
             print(f"Total GPU Memory Used: {final_memory.get('total_gpu_used_gb', 0):.2f} GB")
-        print(f"PyTorch Inference Time = {avg_latency*1000:.2f} ms")
+        print(f"PyTorch Inference Time = {stats['mean']:.2f} ms")
         print(f"# End Benchmark Framework Output")
         
         return {

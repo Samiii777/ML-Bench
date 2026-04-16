@@ -206,72 +206,54 @@ def run_inference(params):
     elif params.precision == "int8":
         print("Warning: INT8 quantization not implemented in this benchmark")
     
-    # Warmup runs
-    print(f"\nStarting warmup ({params.num_warmup} iterations)...")
-    synchronize()
+    # Import shared benchmark utilities
+    from utils.benchmark_utils import (
+        benchmark_loop, warmup as warmup_fn, compute_stats, setup_torch_backends,
+        reset_memory_tracking, measure_peak_memory
+    )
+    setup_torch_backends(cudnn_benchmark=True)
     
-    for i in range(params.num_warmup):
-        with torch.no_grad():
+    # Define one inference step
+    def inference_step():
+        with torch.inference_mode():
             if use_mixed_precision:
                 with torch.amp.autocast('cuda'):
-                    _ = model(input_batch)
+                    return model(input_batch)
             else:
-                _ = model(input_batch)
-        synchronize()
+                return model(input_batch)
     
-    print(f"Warmup completed")
+    # Warmup
+    warmup_fn(inference_step, num_warmup=params.num_warmup, device=device)
     
-    # Benchmark runs
-    print(f"\nStarting benchmark ({params.num_runs} iterations)...")
-    synchronize()
+    # Reset peak memory after warmup for clean benchmark-only measurement
+    reset_memory_tracking(device)
     
-    latencies = []
-    start_time = time.time()
+    # Benchmark runs with CUDA Events timing and GC disabled
+    latencies_ms = benchmark_loop(inference_step, num_runs=params.num_runs, device=device)
     
-    for i in range(params.num_runs):
-        iteration_start = time.time()
-        
-        with torch.no_grad():
-            if use_mixed_precision:
-                with torch.amp.autocast('cuda'):
-                    output = model(input_batch)
-            else:
-                output = model(input_batch)
-        
-        synchronize()
-        iteration_end = time.time()
-        
-        latency = iteration_end - iteration_start
-        latencies.append(latency)
-        
-        if (i + 1) % 20 == 0:
-            print(f"Completed {i + 1}/{params.num_runs} iterations")
+    # Measure peak memory (only covers the benchmark runs, not warmup)
+    peak_mem = measure_peak_memory(device)
     
-    end_time = time.time()
-    total_time = end_time - start_time
-    
-    # Calculate metrics
-    avg_latency = np.mean(latencies)
-    std_latency = np.std(latencies)
-    min_latency = np.min(latencies)
-    max_latency = np.max(latencies)
-    
-    # Throughput calculation
-    total_samples = params.num_runs * params.batch_size
-    throughput = total_samples / total_time
-    
-    # Memory usage
+    # Also get nvidia-smi as secondary reference
     final_memory = get_gpu_memory_nvidia_smi()
-    memory_used_gb = 0
-    if initial_memory and final_memory:
-        memory_used_gb = final_memory["total_gpu_used_gb"] - initial_memory["total_gpu_used_gb"]
-        memory_used_gb = max(0, memory_used_gb)  # Ensure non-negative
+    
+    # Compute comprehensive statistics
+    stats = compute_stats(latencies_ms)
+    avg_latency = stats["mean"] / 1000.0  # seconds for backward compat
+    std_latency = stats["std"] / 1000.0
+    min_latency = stats["min"] / 1000.0
+    max_latency = stats["max"] / 1000.0
+    
+    throughput = (params.batch_size / stats["mean"]) * 1000.0
+    
+    memory_used_gb = peak_mem.get('peak_allocated_gb', 0.0) if peak_mem else 0.0
     
     # Get model info
     total_params = sum(p.numel() for p in model.parameters())
     
-    # Get top predictions for the first sample
-    probabilities = torch.nn.functional.softmax(output[0], dim=0)
+    # Run one extra forward pass to get predictions for display
+    output = inference_step()
+    probabilities = torch.nn.functional.softmax(output[0].float(), dim=0)
     top5_prob, top5_catid = torch.topk(probabilities, 5)
     
     # Print results
@@ -284,19 +266,25 @@ def run_inference(params):
     print(f"Input Shape: {list(input_batch.shape)}")
     print(f"Model Parameters: {total_params:,}")
     print(f"Mixed Precision: {'Enabled' if use_mixed_precision else 'Disabled'}")
-    if memory_used_gb > 0:
-        print(f"GPU Memory Used: {memory_used_gb:.2f} GB")
+    if peak_mem:
+        print(f"GPU Memory Allocated: {memory_used_gb:.3f} GB")
+        print(f"GPU Memory Cached: {peak_mem.get('peak_reserved_gb', 0):.3f} GB")
     print()
     print("Performance Metrics:")
-    print(f"Average Latency: {avg_latency*1000:.2f} ms")
-    print(f"Std Latency: {std_latency*1000:.2f} ms")
-    print(f"Min Latency: {min_latency*1000:.2f} ms")
-    print(f"Max Latency: {max_latency*1000:.2f} ms")
+    print(f"Average Inference Time: {stats['mean']:.2f} ms")
+    print(f"Median Inference Time: {stats['median']:.2f} ms")
+    print(f"P90 Inference Time: {stats['p90']:.2f} ms")
+    print(f"P95 Inference Time: {stats['p95']:.2f} ms")
+    print(f"P99 Inference Time: {stats['p99']:.2f} ms")
+    print(f"Min Inference Time: {stats['min']:.2f} ms")
+    print(f"Max Inference Time: {stats['max']:.2f} ms")
+    print(f"Std Inference Time: {stats['std']:.2f} ms")
     print(f"Throughput: {throughput:.2f} samples/sec")
     print()
     print("Top 5 Predictions:")
     for i in range(min(5, len(top5_catid))):
         print(f"{i+1}: {categories[top5_catid[i]]} ({top5_prob[i]*100:.2f}%)")
+    print(f"PyTorch Inference Time = {stats['mean']:.2f} ms")
     print("=" * 60)
     
     # Print final result in expected format
@@ -304,10 +292,14 @@ def run_inference(params):
     
     return {
         'throughput_fps': throughput,
-        'avg_latency_ms': avg_latency * 1000,
-        'std_latency_ms': std_latency * 1000,
-        'min_latency_ms': min_latency * 1000,
-        'max_latency_ms': max_latency * 1000,
+        'avg_latency_ms': stats['mean'],
+        'std_latency_ms': stats['std'],
+        'min_latency_ms': stats['min'],
+        'max_latency_ms': stats['max'],
+        'median_latency_ms': stats['median'],
+        'p90_latency_ms': stats['p90'],
+        'p95_latency_ms': stats['p95'],
+        'p99_latency_ms': stats['p99'],
         'memory_used_gb': memory_used_gb,
         'total_params': total_params
     }

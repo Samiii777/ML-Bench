@@ -84,10 +84,19 @@ def load_yolo_model(model_name, device, precision="fp32"):
         return model, True  # True indicates real model loaded
         
     except ImportError:
-        print("Warning: ultralytics not available, falling back to ResNet placeholder")
+        print("=" * 60)
+        print("WARNING: ultralytics not installed!")
+        print("YOLO benchmark will use a ResNet placeholder instead.")
+        print("Results are NOT representative of real YOLOv5 performance.")
+        print("Install with: pip install ultralytics")
+        print("=" * 60)
         return load_resnet_placeholder(model_name, device, precision), False
     except Exception as e:
-        print(f"Warning: Failed to load YOLOv5 ({e}), falling back to ResNet placeholder")
+        print("=" * 60)
+        print(f"WARNING: Failed to load YOLOv5: {e}")
+        print("YOLO benchmark will use a ResNet placeholder instead.")
+        print("Results are NOT representative of real YOLOv5 performance.")
+        print("=" * 60)
         return load_resnet_placeholder(model_name, device, precision), False
 
 def load_resnet_placeholder(model_name, device, precision="fp32"):
@@ -117,7 +126,7 @@ def load_resnet_placeholder(model_name, device, precision="fp32"):
     model.eval()
     return model
 
-def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, num_runs=100):
+def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, num_runs=100, device_str='auto'):
     """Benchmark YOLOv5 inference performance"""
     
     print(f"Starting {model_name} detection benchmark")
@@ -126,7 +135,10 @@ def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, n
     print(f"Warmup runs: {num_warmup}")
     print(f"Benchmark runs: {num_runs}")
     
-    device = get_device()
+    if device_str == 'auto':
+        device = get_device()
+    else:
+        device = torch.device(device_str)
     print(f"Device: {device}")
     
     try:
@@ -153,86 +165,57 @@ def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, n
             if precision == "fp16" and device.type == "cuda":
                 input_data = input_data.half()
         
-        # Track memory before inference
-        initial_memory = 0
-        if device.type == "cuda":
-            torch.cuda.reset_peak_memory_stats()
-            torch.cuda.synchronize()
-            initial_memory = torch.cuda.memory_allocated()
+        # Import shared benchmark utilities
+        from utils.benchmark_utils import (
+            BenchmarkTimer, benchmark_loop, warmup as warmup_fn, compute_stats,
+            setup_torch_backends, reset_memory_tracking, measure_peak_memory
+        )
+        setup_torch_backends(cudnn_benchmark=True)
         
         print(f"Input data shape: {input_data.shape}")
-        print(f"Initial GPU memory: {initial_memory / 1024**3:.2f} GB")
+        
+        use_mixed = precision == "mixed" and device.type == "cuda"
+        
+        # Define one inference step
+        def inference_step():
+            with torch.inference_mode():
+                if is_real_yolo:
+                    if use_mixed:
+                        with torch.amp.autocast('cuda'):
+                            return model(input_data, verbose=False)
+                    else:
+                        return model(input_data, verbose=False)
+                else:
+                    if use_mixed:
+                        with torch.amp.autocast('cuda'):
+                            return model(input_data)
+                    else:
+                        return model(input_data)
         
         # Warmup
-        print(f"\nRunning {num_warmup} warmup iterations...")
-        for i in range(num_warmup):
-            with torch.no_grad():
-                if is_real_yolo:
-                    # Real YOLOv5 inference
-                    if precision == "mixed" and device.type == "cuda":
-                        with torch.amp.autocast('cuda'):
-                            _ = model(input_data, verbose=False)
-                    else:
-                        _ = model(input_data, verbose=False)
-                else:
-                    # ResNet placeholder inference
-                    if precision == "mixed" and device.type == "cuda":
-                        with torch.amp.autocast('cuda'):
-                            _ = model(input_data)
-                    else:
-                        _ = model(input_data)
-            
-            if device.type == "cuda":
-                torch.cuda.synchronize()
+        warmup_fn(inference_step, num_warmup=num_warmup, device=device)
         
-        # Benchmark
-        print(f"\nRunning {num_runs} benchmark iterations...")
-        latencies = []
+        # Reset peak memory after warmup for clean benchmark-only measurement
+        reset_memory_tracking(device)
         
-        for i in range(num_runs):
-            start_time = time.time()
-            
-            with torch.no_grad():
-                if is_real_yolo:
-                    # Real YOLOv5 inference
-                    if precision == "mixed" and device.type == "cuda":
-                        with torch.amp.autocast('cuda'):
-                            results = model(input_data, verbose=False)
-                    else:
-                        results = model(input_data, verbose=False)
-                else:
-                    # ResNet placeholder inference
-                    if precision == "mixed" and device.type == "cuda":
-                        with torch.amp.autocast('cuda'):
-                            results = model(input_data)
-                    else:
-                        results = model(input_data)
-            
-            if device.type == "cuda":
-                torch.cuda.synchronize()
-            
-            end_time = time.time()
-            latency = end_time - start_time
-            latencies.append(latency)
-            
-            if (i + 1) % 20 == 0:
-                print(f"Completed {i + 1}/{num_runs} iterations")
+        # Benchmark runs with CUDA Events timing and GC disabled
+        latencies_ms = benchmark_loop(inference_step, num_runs=num_runs, device=device)
         
-        # Calculate metrics
-        avg_latency = np.mean(latencies)
-        std_latency = np.std(latencies)
-        min_latency = np.min(latencies)
-        max_latency = np.max(latencies)
+        # Measure peak memory (only covers the benchmark runs, not warmup)
+        peak_mem = measure_peak_memory(device)
+        
+        # Run one extra pass to get detection results for display
+        results = inference_step()
+        
+        # Compute comprehensive statistics
+        stats = compute_stats(latencies_ms)
+        avg_latency_ms = stats["mean"]
         
         # Throughput calculation
-        throughput = batch_size / avg_latency
+        throughput = (batch_size / avg_latency_ms) * 1000.0
         
-        # Memory usage
-        memory_used_gb = 0
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-            peak_memory = torch.cuda.max_memory_allocated()
-            memory_used_gb = peak_memory / 1024**3
+        # Memory usage from PyTorch allocator
+        memory_used_gb = peak_mem.get('peak_allocated_gb', 0.0) if peak_mem else 0.0
         
         # Count model parameters
         if is_real_yolo:
@@ -265,12 +248,16 @@ def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, n
             print(f"{detection_info}")
         print()
         print("Performance Metrics:")
-        print(f"Average Latency: {avg_latency*1000:.2f} ms")
-        print(f"Std Latency: {std_latency*1000:.2f} ms")
-        print(f"Min Latency: {min_latency*1000:.2f} ms")
-        print(f"Max Latency: {max_latency*1000:.2f} ms")
+        print(f"Average Inference Time: {stats['mean']:.2f} ms")
+        print(f"Median Inference Time: {stats['median']:.2f} ms")
+        print(f"P90 Inference Time: {stats['p90']:.2f} ms")
+        print(f"P95 Inference Time: {stats['p95']:.2f} ms")
+        print(f"P99 Inference Time: {stats['p99']:.2f} ms")
+        print(f"Min Inference Time: {stats['min']:.2f} ms")
+        print(f"Max Inference Time: {stats['max']:.2f} ms")
+        print(f"Std Inference Time: {stats['std']:.2f} ms")
         print(f"Throughput: {throughput:.2f} samples/sec")
-        print(f"Throughput (images/sec): {throughput:.2f}")
+        print(f"PyTorch Inference Time = {stats['mean']:.2f} ms")
         print("=" * 60)
         
         # Print final result in expected format
@@ -278,10 +265,14 @@ def benchmark_yolo_inference(model_name, precision, batch_size, num_warmup=10, n
         
         return {
             'throughput_fps': throughput,
-            'avg_latency_ms': avg_latency * 1000,
-            'std_latency_ms': std_latency * 1000,
-            'min_latency_ms': min_latency * 1000,
-            'max_latency_ms': max_latency * 1000,
+            'avg_latency_ms': stats['mean'],
+            'std_latency_ms': stats['std'],
+            'min_latency_ms': stats['min'],
+            'max_latency_ms': stats['max'],
+            'median_latency_ms': stats['median'],
+            'p90_latency_ms': stats['p90'],
+            'p95_latency_ms': stats['p95'],
+            'p99_latency_ms': stats['p99'],
             'memory_used_gb': memory_used_gb,
             'total_params': total_params,
             'model_type': model_type,
@@ -331,7 +322,7 @@ def main():
     # Run benchmark
     results = benchmark_yolo_inference(
         args.model, args.precision, args.batch_size, 
-        args.num_warmup, args.num_runs
+        args.num_warmup, args.num_runs, args.device
     )
     
     if results is None:

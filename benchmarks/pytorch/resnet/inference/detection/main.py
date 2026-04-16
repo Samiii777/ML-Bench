@@ -158,11 +158,12 @@ def load_detection_model(model_name, device):
         'resnet152': fcos_resnet50_fpn,  # Use ResNet50 as backbone
     }
     
-    # For this benchmark, we'll use FCOS with ResNet50-FPN for all ResNet variants
-    # In practice, you could implement different detection heads for different backbones
     model_func = model_options.get(model_name, fcos_resnet50_fpn)
     
-    print(f"Loading FCOS object detection model with ResNet backbone (using ResNet50-FPN)")
+    if model_name != 'resnet50':
+        print(f"NOTE: Detection uses FCOS-ResNet50-FPN for all variants (requested '{model_name}', actual backbone: ResNet50)")
+    else:
+        print(f"Loading FCOS-ResNet50-FPN detection model")
     model = model_func(pretrained=True)
     model.eval()
     model.to(device)
@@ -224,51 +225,49 @@ def run_inference(params):
     elif params.precision == "int8":
         print("Warning: INT8 quantization not implemented in this benchmark")
     
-    # Warm-up runs
-    print("Performing warm-up runs...")
-    with torch.no_grad():
-        for _ in range(5):
+    # Import shared benchmark utilities
+    from utils.benchmark_utils import (
+        benchmark_loop, warmup, compute_stats, setup_torch_backends,
+        reset_memory_tracking, measure_peak_memory
+    )
+    setup_torch_backends(cudnn_benchmark=True)
+    
+    # Define one inference step
+    def inference_step():
+        with torch.inference_mode():
             if use_mixed_precision:
                 with torch.amp.autocast(device_type=device.type):
-                    _ = model(input_batch)
+                    return model(input_batch)
             else:
-                _ = model(input_batch)
-            synchronize()
+                return model(input_batch)
     
-    # Benchmark runs
-    print("Running benchmark...")
-    inference_times = []
+    # Warmup
+    warmup(inference_step, num_warmup=5, device=device)
+    
+    # Reset peak memory after warmup for clean benchmark-only measurement
+    reset_memory_tracking(device)
+    
+    # Benchmark runs with CUDA Events timing and GC disabled
     num_runs = 50
+    latencies_ms = benchmark_loop(inference_step, num_runs=num_runs, device=device)
     
-    with torch.no_grad():
-        for i in range(num_runs):
-            synchronize()
-            start_time = time.time()
-            
-            if use_mixed_precision:
-                with torch.amp.autocast(device_type=device.type):
-                    predictions = model(input_batch)
-            else:
-                predictions = model(input_batch)
-            
-            synchronize()
-            end_time = time.time()
-            
-            inference_times.append((end_time - start_time) * 1000)  # Convert to ms
+    # Measure peak memory (only covers the benchmark runs, not warmup)
+    peak_mem = measure_peak_memory(device)
     
-    # Calculate statistics
-    avg_inference_time = np.mean(inference_times)
-    std_inference_time = np.std(inference_times)
-    min_inference_time = np.min(inference_times)
-    max_inference_time = np.max(inference_times)
+    # Also get nvidia-smi as secondary reference
+    final_memory = get_gpu_memory_nvidia_smi()
+    
+    # Compute comprehensive statistics
+    stats = compute_stats(latencies_ms)
+    avg_inference_time = stats["mean"]
     
     # Calculate per-sample metrics
     samples_per_batch = params.batch_size
     avg_latency_per_sample = avg_inference_time / samples_per_batch
     throughput_fps = 1000.0 / avg_latency_per_sample  # samples per second
     
-    # Memory measurements
-    final_memory = get_gpu_memory_nvidia_smi()
+    # Get predictions for display
+    predictions = inference_step()
     
     # Print results
     print("=" * 60)
@@ -282,21 +281,27 @@ def run_inference(params):
     print(f"Use case: Object Detection")
     print()
     print("Performance Metrics:")
-    print(f"PyTorch Inference Time = {avg_inference_time:.2f} ms")
+    print(f"Average Inference Time: {stats['mean']:.2f} ms")
     print(f"Per-sample Latency: {avg_latency_per_sample:.2f} ms/sample")
+    print(f"Median Inference Time: {stats['median']:.2f} ms")
+    print(f"P90 Inference Time: {stats['p90']:.2f} ms")
+    print(f"P95 Inference Time: {stats['p95']:.2f} ms")
+    print(f"P99 Inference Time: {stats['p99']:.2f} ms")
+    print(f"Min Inference Time: {stats['min']:.2f} ms")
+    print(f"Max Inference Time: {stats['max']:.2f} ms")
+    print(f"Std Inference Time: {stats['std']:.2f} ms")
     print(f"Throughput: {throughput_fps:.2f} samples/sec")
-    print(f"Min time: {min_inference_time:.2f} ms")
-    print(f"Max time: {max_inference_time:.2f} ms")
-    print(f"Std dev: {std_inference_time:.2f} ms")
+    print(f"PyTorch Inference Time = {avg_inference_time:.2f} ms")
     print()
     
-    # Memory information
-    if initial_memory and final_memory:
-        memory_diff = final_memory["total_gpu_used_gb"] - initial_memory["total_gpu_used_gb"]
+    # Memory information (PyTorch allocator peak is primary, nvidia-smi is secondary)
+    if peak_mem:
         print("Memory Usage:")
-        print(f"GPU Memory Allocated: {memory_diff:.2f} GB")
+        print(f"GPU Memory Allocated: {peak_mem.get('peak_allocated_gb', 0):.3f} GB")
+        print(f"GPU Memory Cached: {peak_mem.get('peak_reserved_gb', 0):.3f} GB")
+    if final_memory:
         print(f"Total GPU Memory Used: {final_memory['total_gpu_used_gb']:.2f} GB")
-        print()
+    print()
     
     # Show detection results for first image
     if len(predictions) > 0 and len(predictions[0]['boxes']) > 0:

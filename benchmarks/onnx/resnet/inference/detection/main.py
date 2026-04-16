@@ -116,15 +116,13 @@ def print_provider_info():
 
 def synchronize_provider(provider_name):
     """Synchronize execution for timing (provider-specific)"""
-    if "CUDA" in provider_name:
+    if any(gpu_hint in provider_name for gpu_hint in ["CUDA", "Tensorrt", "ROCm", "MIGraphX"]):
         try:
             import torch
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
         except ImportError:
             pass
-    # For CPU and other providers, no explicit sync needed
-    time.sleep(0.001)  # Small delay to ensure completion
 
 def load_coco_categories(filename):
     """Load COCO categories from the given file"""

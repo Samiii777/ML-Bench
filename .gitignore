@@ -157,4 +157,7 @@ huggingface_hub/
 **/models/**/*.pth
 **/models/**/*.pt
 **/models/**/*.safetensors
-**/models/**/*.bin 
+**/models/**/*.bin
+
+# llama.cpp clone
+llama.cpp/

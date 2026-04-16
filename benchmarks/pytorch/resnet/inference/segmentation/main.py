@@ -45,8 +45,7 @@ def create_segmentation_model(model_name, num_classes=21):
         # DeepLabV3 with ResNet-101 backbone  
         model = deeplabv3_resnet101(weights='DEFAULT', num_classes=num_classes)
     else:
-        # Default to ResNet-50 for other ResNet variants
-        print(f"Using ResNet-50 backbone for {model_name} (closest available)")
+        print(f"NOTE: Segmentation uses DeepLabV3-ResNet50 for '{model_name}' (only ResNet50/101 have pretrained DeepLabV3 weights)")
         model = deeplabv3_resnet50(weights='DEFAULT', num_classes=num_classes)
     
     # Always set to eval mode for inference
@@ -97,7 +96,7 @@ def run_segmentation(model, image_tensor, device):
     """Run semantic segmentation inference"""
     model.eval()
     
-    with torch.no_grad():
+    with torch.inference_mode():
         # Add batch dimension
         input_batch = image_tensor.unsqueeze(0).to(device)
         
@@ -127,8 +126,15 @@ def colorize_segmentation(seg_mask, colors):
     
     return colored
 
-def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3, benchmark_runs=10, precision="fp32"):
+def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=5, benchmark_runs=20, precision="fp32"):
     """Benchmark semantic segmentation model performance"""
+    # Import shared benchmark utilities
+    from utils.benchmark_utils import (
+        benchmark_loop, warmup as warmup_fn, compute_stats, setup_torch_backends,
+        reset_memory_tracking, measure_peak_memory
+    )
+    setup_torch_backends(cudnn_benchmark=True)
+    
     print(f"Creating {model_name} segmentation model...")
     
     # Create model
@@ -136,10 +142,12 @@ def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3
     model = model.to(device)
     
     # Set precision
+    use_mixed = False
     if precision == "fp16" and device.type == "cuda":
         model = model.half()
         print("Using FP16 precision")
     elif precision == "mixed":
+        use_mixed = True
         print("Using mixed precision")
     else:
         print("Using FP32 precision")
@@ -159,56 +167,38 @@ def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3
     print(f"Running on device: {device}")
     print(f"Batch size: {batch_size}")
     
+    # Define one inference step
+    def inference_step():
+        with torch.inference_mode():
+            if use_mixed and device.type == "cuda":
+                with torch.autocast(device_type='cuda'):
+                    return model(input_batch)
+            else:
+                return model(input_batch)
+    
     # Warmup
-    print("Warming up...")
-    for i in range(warmup_runs):
-        with torch.no_grad():
-            if precision == "mixed" and device.type == "cuda":
-                with torch.autocast(device_type='cuda'):
-                    output = model(input_batch)
-            else:
-                output = model(input_batch)
+    warmup_fn(inference_step, num_warmup=warmup_runs, device=device)
     
-    # Synchronize before benchmarking
-    if device.type == "cuda":
-        torch.cuda.synchronize()
+    # Reset peak memory after warmup for clean benchmark-only measurement
+    reset_memory_tracking(device)
     
-    # Benchmark
-    print("Benchmarking...")
-    times = []
+    # Benchmark runs with CUDA Events timing and GC disabled
+    latencies_ms = benchmark_loop(inference_step, num_runs=benchmark_runs, device=device)
     
-    for i in range(benchmark_runs):
-        start_time = time.perf_counter()
-        
-        with torch.no_grad():
-            if precision == "mixed" and device.type == "cuda":
-                with torch.autocast(device_type='cuda'):
-                    output = model(input_batch)
-            else:
-                output = model(input_batch)
-        
-        if device.type == "cuda":
-            torch.cuda.synchronize()
-        
-        end_time = time.perf_counter()
-        times.append(end_time - start_time)
+    # Measure peak memory (only covers the benchmark runs, not warmup)
+    peak_mem = measure_peak_memory(device)
     
-    # Calculate statistics
-    avg_time = np.mean(times)
-    std_time = np.std(times)
-    min_time = np.min(times)
-    max_time = np.max(times)
+    # Compute comprehensive statistics
+    stats = compute_stats(latencies_ms)
+    avg_time_ms = stats["mean"]
     
     # Calculate throughput and per-sample latency
-    samples_per_second = batch_size / avg_time
-    per_sample_latency_ms = (avg_time * 1000) / batch_size  # ms per sample
+    samples_per_second = (batch_size / avg_time_ms) * 1000.0
+    per_sample_latency_ms = avg_time_ms / batch_size
     
-    # Memory usage
-    memory_used_gb = 0.0
-    memory_cached_gb = 0.0
-    if device.type == "cuda":
-        memory_used_gb = torch.cuda.max_memory_allocated() / 1024**3  # GB
-        memory_cached_gb = torch.cuda.max_memory_reserved() / 1024**3  # GB
+    # Memory usage from PyTorch allocator
+    memory_used_gb = peak_mem.get('peak_allocated_gb', 0.0) if peak_mem else 0.0
+    memory_cached_gb = peak_mem.get('peak_reserved_gb', 0.0) if peak_mem else 0.0
     
     # Get segmentation results for the first image
     sample_input = image_tensor.unsqueeze(0).to(device)
@@ -225,19 +215,22 @@ def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3
     print(f"Precision: {precision}")
     print(f"Input Resolution: {input_batch.shape[2]}x{input_batch.shape[3]}")
     print(f"Detected Classes: {len(unique_classes)} classes")
-    print(f"Average Time: {avg_time*1000:.2f} ms")
+    print(f"Average Inference Time: {stats['mean']:.2f} ms")
     print(f"Per-sample Latency: {per_sample_latency_ms:.2f} ms/sample")
-    print(f"Std Dev: {std_time*1000:.2f} ms")
-    print(f"Min Time: {min_time*1000:.2f} ms") 
-    print(f"Max Time: {max_time*1000:.2f} ms")
+    print(f"Median Inference Time: {stats['median']:.2f} ms")
+    print(f"P90 Inference Time: {stats['p90']:.2f} ms")
+    print(f"P95 Inference Time: {stats['p95']:.2f} ms")
+    print(f"P99 Inference Time: {stats['p99']:.2f} ms")
+    print(f"Min Inference Time: {stats['min']:.2f} ms")
+    print(f"Max Inference Time: {stats['max']:.2f} ms")
+    print(f"Std Inference Time: {stats['std']:.2f} ms")
     print(f"Throughput: {samples_per_second:.2f} samples/sec")
     
-    if device.type == "cuda":
+    if peak_mem:
         print(f"GPU Memory Allocated: {memory_used_gb:.2f} GB")
         print(f"GPU Memory Cached: {memory_cached_gb:.2f} GB")
-        print(f"Total GPU Memory Used: {memory_cached_gb:.2f} GB")
     
-    print(f"PyTorch Inference Time = {avg_time*1000:.2f} ms")
+    print(f"PyTorch Inference Time = {stats['mean']:.2f} ms")
     print("="*60)
     
     return {
@@ -245,10 +238,14 @@ def benchmark_segmentation_model(model_name, device, batch_size=1, warmup_runs=3
         'device': str(device),
         'batch_size': batch_size,
         'precision': precision,
-        'avg_time_ms': avg_time * 1000,
-        'std_time_ms': std_time * 1000,
-        'min_time_ms': min_time * 1000,
-        'max_time_ms': max_time * 1000,
+        'avg_time_ms': stats['mean'],
+        'std_time_ms': stats['std'],
+        'min_time_ms': stats['min'],
+        'max_time_ms': stats['max'],
+        'median_time_ms': stats['median'],
+        'p90_time_ms': stats['p90'],
+        'p95_time_ms': stats['p95'],
+        'p99_time_ms': stats['p99'],
         'samples_per_second': samples_per_second,
         'memory_used_gb': memory_used_gb,
         'memory_cached_gb': memory_cached_gb,
@@ -263,9 +260,9 @@ def main():
                        help='Batch size for inference')
     parser.add_argument('--precision', type=str, default='fp32', choices=['fp32', 'fp16', 'mixed'],
                        help='Precision mode')
-    parser.add_argument('--warmup_runs', type=int, default=3,
+    parser.add_argument('--warmup_runs', type=int, default=5,
                        help='Number of warmup runs')
-    parser.add_argument('--benchmark_runs', type=int, default=10,
+    parser.add_argument('--benchmark_runs', type=int, default=20,
                        help='Number of benchmark runs')
     parser.add_argument('--device', type=str, default='auto',
                        help='Device to use (auto, cpu, cuda, mps)')
