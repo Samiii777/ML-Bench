@@ -132,47 +132,17 @@ class BenchmarkRunner:
         return []
     
     def get_benchmark_script_path(self, framework: str, model: str, mode: str, use_case: str) -> str:
-        """Get the path to the benchmark script"""
-        # Handle Ollama framework differently
-        if framework == "ollama":
-            # Ollama uses a simpler structure: benchmarks/ollama/use_case/main.py
-            base_path = Path("benchmarks") / "ollama" / use_case
-            script_path = base_path / "main.py"
-            return str(script_path)
-        
-        # Handle ComfyUI framework differently
-        if framework == "comfyui":
-            # ComfyUI uses: benchmarks/ComfyUI/main.py
-            base_path = Path("benchmarks") / "ComfyUI"
-            script_path = base_path / "main.py"
-            return str(script_path)
-        
-        # Get the actual directory name (model family)
+        """Get the path to the benchmark script via convention-based discovery."""
+        from core.discovery import resolve_benchmark_path, get_registry
+        registry = get_registry(Path.cwd())
+        resolved = resolve_benchmark_path(registry, framework, model, mode, use_case)
+        if resolved is not None:
+            return str(resolved.relative_to(Path.cwd()))
+
+        # Fallback: construct path the old way so nothing breaks for edge cases
         directory_name = get_model_family(model)
-        
-        # Handle GPU operations with subdirectories
-        if directory_name == "gpu_ops":
-            # Map model names to their subdirectories
-            gpu_ops_mapping = {
-                "gemm_ops": "gemm",
-                "conv_ops": "conv", 
-                "memory_ops": "memory",
-                "elementwise_ops": "elementwise",
-                "reduction_ops": "reduction"
-            }
-            
-            if model in gpu_ops_mapping:
-                subdirectory = gpu_ops_mapping[model]
-                base_path = Path("benchmarks") / framework / directory_name / mode / use_case / subdirectory
-            else:
-                # Fallback for unknown GPU ops
-                base_path = Path("benchmarks") / framework / directory_name / mode / use_case
-        else:
-            # Standard path for other models
-            base_path = Path("benchmarks") / framework / directory_name / mode / use_case
-        
-        script_path = base_path / "main.py"
-        return str(script_path)
+        base_path = Path("benchmarks") / framework / directory_name / mode / use_case
+        return str(base_path / "main.py")
     
     def run_single_benchmark(self, framework: str, model: str, mode: str, use_case: str, 
                            precision: str, batch_size: int, execution_provider: str = None, training_mode: str = "scratch", epochs: int = 3, timeout_minutes: int = 5, device: str = "auto") -> Dict[str, Any]:
@@ -324,10 +294,24 @@ class BenchmarkRunner:
             }
     
     def _parse_benchmark_output(self, output: str) -> Dict[str, Any]:
-        """Parse benchmark output to extract metrics"""
+        """Parse benchmark output to extract metrics.
+
+        Checks for structured JSON block first (new format), falls back
+        to legacy line-by-line regex parsing for unmigrated scripts.
+        """
+        from core.schema import JSON_START, JSON_END, BenchmarkResult
+        if JSON_START in output and JSON_END in output:
+            try:
+                start = output.index(JSON_START) + len(JSON_START)
+                end = output.index(JSON_END)
+                result = BenchmarkResult.from_json(output[start:end].strip())
+                return result.to_legacy_metrics()
+            except Exception:
+                pass  # fall through to legacy parsing
+
         metrics = {}
         lines = output.split('\n')
-        
+
         for line in lines:
             # Look for inference time
             if "Inference Time" in line and "ms" in line and "=" in line:

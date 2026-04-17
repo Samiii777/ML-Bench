@@ -411,7 +411,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1,
                        help="Batch size for inference")
     parser.add_argument("--execution_provider", type=str, default=None,
-                       choices=["CUDAExecutionProvider", "TensorrtExecutionProvider", "CPUExecutionProvider"],
+                       choices=["CUDAExecutionProvider", "TensorrtExecutionProvider", "CPUExecutionProvider",
+                                "ROCMExecutionProvider", "MIGraphXExecutionProvider"],
                        help="ONNX execution provider")
     
     args = parser.parse_args()

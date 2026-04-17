@@ -10,8 +10,15 @@ import time
 import sys
 import os
 import urllib.request
+from pathlib import Path
 
-# Clean import of utils - no ugly relative paths!
+project_root = Path(__file__).resolve()
+for parent in project_root.parents:
+    if (parent / "benchmark.py").exists():
+        if str(parent) not in sys.path:
+            sys.path.insert(0, str(parent))
+        break
+
 import utils
 from utils.download import get_imagenet_classes_path, get_sample_image_path
 
@@ -450,7 +457,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=1,
                        help="Batch size for inference")
     parser.add_argument("--execution_provider", type=str, default=None,
-                       choices=["CUDAExecutionProvider", "TensorrtExecutionProvider", "CPUExecutionProvider"],
+                       choices=["CUDAExecutionProvider", "TensorrtExecutionProvider", "CPUExecutionProvider",
+                                "ROCMExecutionProvider", "MIGraphXExecutionProvider"],
                        help="Specific ONNX execution provider to test")
     args = parser.parse_args()
 

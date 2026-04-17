@@ -84,7 +84,10 @@ try:
                             help='Legacy option - images are automatically saved to benchmark_results/images/')
         parser.add_argument('--custom-prompt', type=str, default=None,
                             help='Custom prompt for generation (default: use test prompt)')
-        
+        parser.add_argument('--sdp-backend', type=str, default='auto',
+                            choices=['auto', 'safe', 'math', 'mem_efficient', 'flash'],
+                            help='Scaled-dot-product-attention backend (default: auto)')
+
         args = parser.parse_args()
         
         try:

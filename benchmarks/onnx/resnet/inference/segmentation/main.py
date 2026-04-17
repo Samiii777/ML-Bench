@@ -409,7 +409,8 @@ def main():
     parser.add_argument('--precision', type=str, default='fp32', choices=['fp32', 'fp16'],
                        help='Precision mode')
     parser.add_argument('--execution_provider', type=str, default='CPUExecutionProvider',
-                       choices=['CPUExecutionProvider', 'CUDAExecutionProvider', 'TensorrtExecutionProvider'],
+                       choices=['CPUExecutionProvider', 'CUDAExecutionProvider', 'TensorrtExecutionProvider',
+                                'ROCMExecutionProvider', 'MIGraphXExecutionProvider'],
                        help='ONNX execution provider')
     parser.add_argument('--warmup_runs', type=int, default=3,
                        help='Number of warmup runs')

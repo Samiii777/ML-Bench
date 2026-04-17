@@ -317,7 +317,8 @@ def main():
     parser.add_argument('--batch_size', type=int, default=1,
                        help='Batch size for inference')
     parser.add_argument('--execution_provider', type=str, default='CUDAExecutionProvider',
-                       choices=['CUDAExecutionProvider', 'TensorrtExecutionProvider', 'CPUExecutionProvider'],
+                       choices=['CUDAExecutionProvider', 'TensorrtExecutionProvider', 'CPUExecutionProvider',
+                                'ROCMExecutionProvider', 'MIGraphXExecutionProvider'],
                        help='ONNX Runtime execution provider')
     parser.add_argument('--num_warmup', type=int, default=10,
                        help='Number of warmup iterations')

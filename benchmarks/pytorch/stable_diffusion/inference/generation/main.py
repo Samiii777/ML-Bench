@@ -829,7 +829,7 @@ def run_inference(params):
     print(f"Number of runs per model: {params.num_runs}")
     
     # Configure SDPA backend before any pipeline work touches attention.
-    sdp_choice = getattr(params, 'sdp_backend', 'safe')
+    sdp_choice = getattr(params, 'sdp_backend', 'auto')
     _configure_sdp_backend(sdp_choice)
     
     # Set device
@@ -1003,13 +1003,14 @@ def main():
                         help='Custom prompt for generation (default: use test prompt)')
     parser.add_argument('--device', type=str, default='auto',
                         help='Device to use (auto, cpu, cuda, mps)')
-    parser.add_argument('--sdp-backend', type=str, default='safe',
+    parser.add_argument('--sdp-backend', type=str, default='auto',
                         choices=['auto', 'safe', 'math', 'mem_efficient', 'flash'],
                         help='Scaled-dot-product-attention backend. '
-                             '"safe" (default): disables flash on ROCm (known to '
-                             'hang on long-seq MMDiT attention) but keeps it on '
-                             'NVIDIA. "auto": PyTorch defaults. "math" / '
-                             '"mem_efficient" / "flash": force a specific kernel.')
+                             '"auto" (default): let PyTorch pick the fastest '
+                             'available kernel. "safe": disables flash on ROCm '
+                             '(workaround for older ROCm versions where flash '
+                             'could hang). "math" / "mem_efficient" / "flash": '
+                             'force a specific kernel.')
     
     args = parser.parse_args()
     

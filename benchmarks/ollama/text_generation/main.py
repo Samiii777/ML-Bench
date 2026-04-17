@@ -22,49 +22,14 @@ for parent in project_root.parents:
             sys.path.insert(0, str(parent))
         break
 
+from utils.config import OLLAMA_MODELS
+
+
 def get_model_configs():
-    """Get configurations for available Ollama models"""
+    """Get configurations for available Ollama models, driven by utils/config.py."""
     return [
-        {
-            'name': 'llama3.1:8b',
-            'model_id': 'llama3.1:8b',
-            'type': 'text_generation'
-        },
-        {
-            'name': 'qwen2.5:7b',
-            'model_id': 'qwen2.5:7b', 
-            'type': 'text_generation'
-        },
-        {
-            'name': 'gpt-oss:20b',
-            'model_id': 'gpt-oss:20b',
-            'type': 'text_generation'
-        },
-        {
-            'name': 'deepseek-r1:8b',
-            'model_id': 'deepseek-r1:8b',
-            'type': 'text_generation'
-        },
-        {
-            'name': 'gemma3:4b',
-            'model_id': 'gemma3:4b',
-            'type': 'text_generation'
-        },
-        {
-            'name': 'qwen3:8b',
-            'model_id': 'qwen3:8b',
-            'type': 'text_generation'
-        },
-        {
-            'name': 'qwen3:14b',
-            'model_id': 'qwen3:14b',
-            'type': 'text_generation'
-        },
-        {
-            'name': 'llama3.2:3b',
-            'model_id': 'llama3.2:3b',
-            'type': 'text_generation'
-        }
+        {'name': m, 'model_id': m, 'type': 'text_generation'}
+        for m in OLLAMA_MODELS
     ]
 
 def check_ollama_server():
