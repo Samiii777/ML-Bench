@@ -74,6 +74,25 @@ def load_yolo_model(model_name, device, precision="fp32"):
         # Move to device
         model.to(device)
         
+        # Fuse conv+bn BEFORE converting to fp16. Ultralytics' fuse_conv_and_bn
+        # synthesizes a zero-bias tensor with the default fp32 dtype when the
+        # conv has no bias; if we've already called .half() on the model, the
+        # conv weights are fp16 but that synthesized bias is fp32, and the
+        # subsequent torch.mm(w_bn, b_conv) fails with a dtype mismatch on
+        # ROCm/MIOpen (NVIDIA cuBLAS happens to silently promote).
+        # Fusing first in fp32 sidesteps the issue entirely; .half() then
+        # converts the fused model uniformly.
+        try:
+            if hasattr(model, "fuse"):
+                model.fuse()
+            elif hasattr(model, "model") and hasattr(model.model, "fuse"):
+                model.model.fuse()
+        except Exception as fuse_err:
+            # Non-fatal: ultralytics may still lazily fuse inside predict(),
+            # but at least we tried. Log so the user can see it.
+            print(f"Note: explicit model.fuse() failed ({fuse_err}); "
+                  f"relying on ultralytics' lazy fuse")
+
         # Set precision
         if precision == "fp16" and device.type == "cuda":
             model.half()
