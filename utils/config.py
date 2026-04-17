@@ -33,6 +33,10 @@ MODEL_FAMILIES = {
     'stable_diffusion_3_medium': 'stable_diffusion',
     'sd3_medium': 'stable_diffusion',
     'sd3': 'stable_diffusion',
+    'stable_diffusion_3_5_medium': 'stable_diffusion',
+    'sd3.5_medium': 'stable_diffusion',
+    'sd35_medium': 'stable_diffusion',
+    'sd3.5': 'stable_diffusion',
     'stable_diffusion_3_5_large_turbo': 'stable_diffusion',
     'sd3.5_turbo': 'stable_diffusion',
     'sd35_turbo': 'stable_diffusion',
@@ -85,6 +89,7 @@ PYTORCH_MODELS = [
     "bert-base-uncased", "bert-base-cased", "bert-large-uncased", "bert-large-cased", "bert",
     "stable_diffusion_1_5", "sd1.5", "sd15",
     "stable_diffusion_3_medium", "sd3_medium", "sd3",
+    "stable_diffusion_3_5_medium", "sd3.5_medium", "sd35_medium", "sd3.5",
     "stable_diffusion_3_5_large_turbo", "sd3.5_turbo", "sd35_turbo",
     "flux_1_schnell", "flux1_schnell", "flux_schnell", "flux.1-schnell",
     "flux_1_dev", "flux1_dev", "flux_dev", "flux.1-dev", "flux",
@@ -207,6 +212,11 @@ VRAM_REQUIREMENTS = {
     'stable_diffusion_3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
     'sd3_medium': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
     'sd3': {'fp32': 24.0, 'fp16': 18.5, 'mixed': '>24GB'},
+    # SD3.5 Medium - 2.5B MMDiT + T5 XXL + dual CLIP; fp16 slot actually runs bf16 (see benchmark script)
+    'stable_diffusion_3_5_medium': {'fp32': 20.0, 'fp16': 10.0, 'mixed': 12.0},
+    'sd3.5_medium': {'fp32': 20.0, 'fp16': 10.0, 'mixed': 12.0},
+    'sd35_medium': {'fp32': 20.0, 'fp16': 10.0, 'mixed': 12.0},
+    'sd3.5': {'fp32': 20.0, 'fp16': 10.0, 'mixed': 12.0},
     # SD3.5 Large Turbo - 8B params, optimized for 4-step inference (more efficient than regular SD3.5)
     'stable_diffusion_3_5_large_turbo': {'fp32': 16.0, 'fp16': 10.0, 'mixed': 14.0},
     'sd3.5_turbo': {'fp32': 16.0, 'fp16': 10.0, 'mixed': 14.0},
@@ -282,7 +292,7 @@ def get_unique_models(framework="pytorch"):
             "inceptionv3",  # InceptionV3 model
             "yolov5s", "yolov5m", "yolov5l", "yolov5x",  # YOLOv5 variants
             "bert-base-uncased", "bert-large-uncased",  # BERT models
-            "stable_diffusion_1_5", "stable_diffusion_3_medium", "stable_diffusion_3_5_large_turbo",  # Stable Diffusion models
+            "stable_diffusion_1_5", "stable_diffusion_3_medium", "stable_diffusion_3_5_medium", "stable_diffusion_3_5_large_turbo",  # Stable Diffusion models
             "flux_1_schnell", "flux_1_dev",  # FLUX models
             "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",  # GPU operations benchmark
             "meta-llama/Llama-3.1-8B",  # Latest LLaMA model
