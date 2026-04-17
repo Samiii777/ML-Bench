@@ -62,10 +62,10 @@ PYTORCH_MODELS = [
     # NLP
     "bert-base-uncased",
     # Image generation
-    "stable_diffusion_1_5", "sd1.5",
-    "stable_diffusion_3_medium", "sd3",
-    "flux_1_schnell", "flux_schnell",
-    "flux_1_dev", "flux_dev",
+    "stable_diffusion_1_5",
+    "stable_diffusion_3_medium",
+    "flux_1_schnell",
+    "flux_1_dev",
     # GPU compute
     "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",
     # LLMs
@@ -249,54 +249,30 @@ def get_model_family(model_name):
             print(f"Unknown model family for '{model_name}', defaulting to 'llama'")
             return 'llama'
     
-    # Fallback to the model name itself
+    # Prefix-based fallback for model variants (e.g. resnet18 -> resnet)
+    model_lower = model_name.lower()
+    for prefix, family in [('resnet', 'resnet'), ('yolov5', 'yolo'), ('yolov8', 'yolo'),
+                           ('bert', 'bert'), ('vit_', 'vit'), ('convnext', 'convnext'),
+                           ('inception', 'inception')]:
+        if model_lower.startswith(prefix):
+            return family
+
     return model_name
 
 def get_unique_models(framework="pytorch"):
-    """Get list of unique models for a framework, removing aliases"""
-    if framework == "pytorch":
-        # Only include the canonical model names, not aliases
-        return [
-            "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
-            "inceptionv3",  # InceptionV3 model
-            "yolov5s", "yolov5m", "yolov5l", "yolov5x",  # YOLOv5 variants
-            "bert-base-uncased", "bert-large-uncased",  # BERT models
-            "stable_diffusion_1_5", "stable_diffusion_3_medium", "stable_diffusion_3_5_medium", "stable_diffusion_3_5_large_turbo",  # Stable Diffusion models
-            "flux_1_schnell", "flux_1_dev",  # FLUX models
-            "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",  # GPU operations benchmark
-            "meta-llama/Llama-3.1-8B",  # Latest LLaMA model
-            "meta-llama/Llama-3.2-1B-Instruct",  # LLaMA 3.2 models
-            "meta-llama/Llama-3.2-3B-Instruct",
-            "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",  # DeepSeek reasoning models
-            "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B",
-            "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-            "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"
-        ]
-    elif framework == "ollama":
-        return [
-            "llama3.1:8b",
-            "qwen2.5:7b",
-            "gpt-oss:20b",
-            "deepseek-r1:8b",
-            "gemma3:4b",
-            "qwen3:8b",
-            "qwen3:14b",
-            "llama3.2:3b"
-        ]
-    elif framework == "onnx":
-        return [
-            "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
-            "inceptionv3",  # InceptionV3 model
-            "yolov5s", "yolov5m", "yolov5l", "yolov5x",  # YOLOv5 variants
-            "bert-base-uncased", "bert-large-uncased"  # BERT models
-        ]
-    elif framework == "comfyui":
-        return [
-            "comfyui_flux_schnell",  # ComfyUI FLUX.1-schnell
-            "comfyui_flux_dev"       # ComfyUI FLUX.1-dev
-        ]
-    else:
-        return get_unique_models("pytorch")  # Default to pytorch
+    """Get list of unique models for a framework, removing aliases.
+
+    Derives from the canonical model lists (PYTORCH_MODELS, ONNX_MODELS, etc.)
+    so there is only one place to maintain the model inventory.
+    """
+    source = {
+        "pytorch": PYTORCH_MODELS,
+        "onnx": ONNX_MODELS,
+        "ollama": OLLAMA_MODELS,
+        "comfyui": COMFYUI_MODELS,
+    }.get(framework, PYTORCH_MODELS)
+
+    return list(source)
 
 def get_available_models(framework="pytorch"):
     """Get list of all available models for a framework (including aliases)"""
