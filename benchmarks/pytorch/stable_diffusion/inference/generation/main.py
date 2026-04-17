@@ -679,6 +679,70 @@ def run_single_model_benchmark(model_config, params, device=None):
         'gpu_utilization_percent': final_memory['gpu_utilization_percent'] if final_memory else None
     }
 
+def _configure_sdp_backend(choice: str):
+    """Configure PyTorch scaled_dot_product_attention backends.
+    
+    On ROCm, the flash-SDPA path (AOTriton) can hang or be extremely slow for
+    long-sequence MMDiT attention (SD3, FLUX). The math + mem_efficient
+    backends are reliable everywhere. This helper lets the user pick.
+    
+    choice values:
+      'auto'          - leave PyTorch defaults
+      'math'          - force pure-math SDPA (slowest but most portable)
+      'mem_efficient' - memory-efficient kernel only
+      'flash'         - flash-attention kernel only (NVIDIA recommended)
+      'safe'          - disable flash on ROCm, keep it on NVIDIA (recommended default)
+    """
+    if not torch.cuda.is_available():
+        return
+    is_rocm = getattr(torch.version, "hip", None) is not None
+    be = torch.backends.cuda
+    
+    # Map of setter availability by PyTorch version
+    def _try(name, val):
+        fn = getattr(be, name, None)
+        if callable(fn):
+            try:
+                fn(val)
+            except Exception:
+                pass
+    
+    if choice == 'auto':
+        return
+    if choice == 'safe':
+        if is_rocm:
+            # Disable flash on ROCm to avoid known hangs; keep math + mem_efficient.
+            _try('enable_flash_sdp', False)
+            _try('enable_mem_efficient_sdp', True)
+            _try('enable_math_sdp', True)
+            _try('enable_cudnn_sdp', False)
+            print("[SDP] ROCm detected; disabling flash-SDPA, keeping math + mem_efficient")
+        else:
+            print("[SDP] NVIDIA/CUDA — leaving all SDPA backends enabled")
+        return
+    if choice == 'math':
+        _try('enable_flash_sdp', False)
+        _try('enable_mem_efficient_sdp', False)
+        _try('enable_math_sdp', True)
+        _try('enable_cudnn_sdp', False)
+        print("[SDP] forcing math-only SDPA")
+        return
+    if choice == 'mem_efficient':
+        _try('enable_flash_sdp', False)
+        _try('enable_mem_efficient_sdp', True)
+        _try('enable_math_sdp', False)
+        _try('enable_cudnn_sdp', False)
+        print("[SDP] forcing mem_efficient SDPA")
+        return
+    if choice == 'flash':
+        _try('enable_flash_sdp', True)
+        _try('enable_mem_efficient_sdp', False)
+        _try('enable_math_sdp', False)
+        _try('enable_cudnn_sdp', False)
+        print("[SDP] forcing flash SDPA (may hang on ROCm!)")
+        return
+
+
 def run_inference(params):
     """Main inference function that runs both SD 1.5 and SD3"""
     
@@ -691,6 +755,10 @@ def run_inference(params):
     print(f"Image size: {params.height}x{params.width}")
     print(f"Inference steps: {params.num_inference_steps}")
     print(f"Number of runs per model: {params.num_runs}")
+    
+    # Configure SDPA backend before any pipeline work touches attention.
+    sdp_choice = getattr(params, 'sdp_backend', 'safe')
+    _configure_sdp_backend(sdp_choice)
     
     # Set device
     if params.device == 'auto':
@@ -843,6 +911,13 @@ def main():
                         help='Custom prompt for generation (default: use test prompt)')
     parser.add_argument('--device', type=str, default='auto',
                         help='Device to use (auto, cpu, cuda, mps)')
+    parser.add_argument('--sdp-backend', type=str, default='safe',
+                        choices=['auto', 'safe', 'math', 'mem_efficient', 'flash'],
+                        help='Scaled-dot-product-attention backend. '
+                             '"safe" (default): disables flash on ROCm (known to '
+                             'hang on long-seq MMDiT attention) but keeps it on '
+                             'NVIDIA. "auto": PyTorch defaults. "math" / '
+                             '"mem_efficient" / "flash": force a specific kernel.')
     
     args = parser.parse_args()
     
