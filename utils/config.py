@@ -476,7 +476,14 @@ def get_vram_requirement(model: str, precision: str = 'fp32', batch_size: int = 
     model_key = model.lower()
     
     if model_key in VRAM_REQUIREMENTS:
-        req = VRAM_REQUIREMENTS[model_key].get(precision, VRAM_REQUIREMENTS[model_key].get('fp32', 4.0))
+        # bf16 and fp16 have identical memory footprint (2 bytes/param), so
+        # fall back to the fp16 entry if no explicit bf16 value is provided
+        # rather than jumping all the way to fp32.
+        entry = VRAM_REQUIREMENTS[model_key]
+        if precision == 'bf16':
+            req = entry.get('bf16', entry.get('fp16', entry.get('fp32', 4.0)))
+        else:
+            req = entry.get(precision, entry.get('fp32', 4.0))
         
         if isinstance(req, str):  # Already formatted like ">24GB"
             return req

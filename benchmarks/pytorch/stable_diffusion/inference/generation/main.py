@@ -137,8 +137,17 @@ def get_model_configs():
     ]
 
 
+def _bf16_supported() -> bool:
+    """True if the current CUDA device has native bf16 support."""
+    try:
+        return bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
+    except Exception:
+        return False
+
+
 def _half_dtype_for(model_type: str, force_fp16: bool = False) -> torch.dtype:
-    """Pick the recommended half-precision dtype for a given model family.
+    """Pick the recommended half-precision dtype for a given model family
+    when the user asks for `--precision fp16`.
     
     SD3 / SD3.5 / FLUX use MMDiT attention whose activations overflow fp16's
     ~6.5e4 range for many prompts, producing NaN or black-image outputs.
@@ -149,6 +158,9 @@ def _half_dtype_for(model_type: str, force_fp16: bool = False) -> torch.dtype:
       - the user passed --force-fp16 (explicit opt-out for A/B comparison), or
       - the current CUDA device lacks native bf16 support (pre-Ampere NVIDIA,
         very old ROCm), since emulated bf16 is much slower than native fp16.
+    
+    For an explicit `--precision bf16` request, don't call this — honor bf16
+    unconditionally (subject to native-support check).
     """
     is_bf16_family = model_type in (
         'sd3', 'sd3_medium', 'sd3_turbo', 'sd35_medium',
@@ -156,15 +168,60 @@ def _half_dtype_for(model_type: str, force_fp16: bool = False) -> torch.dtype:
     )
     if not is_bf16_family or force_fp16:
         return torch.float16
-    try:
-        if torch.cuda.is_available() and torch.cuda.is_bf16_supported():
-            return torch.bfloat16
-    except Exception:
-        pass
+    if _bf16_supported():
+        return torch.bfloat16
     print(f"Warning: {model_type} is recommended to run in bf16, but this "
           f"device does not support bf16 natively; falling back to fp16 "
           f"(may produce NaN / black outputs on some prompts)")
     return torch.float16
+
+
+def _resolve_dtypes(precision: str, model_type: str, force_fp16: bool):
+    """Resolve a user-facing --precision request to concrete dtypes and a
+    human-readable effective-precision label for reporting.
+    
+    Returns (load_dtype, autocast_dtype_or_None, effective_label):
+      - load_dtype: passed as `torch_dtype` to `from_pretrained`
+      - autocast_dtype: non-None only for "mixed" precision; the dtype used
+        under `torch.autocast`
+      - effective_label: short string describing what actually runs, e.g.
+        "fp32", "fp16", "bf16", "mixed(fp16)", "mixed(bf16)". This is what
+        gets printed in headers / results, so users can see at a glance
+        whether the fp16 → bf16 auto-swap kicked in.
+    """
+    if precision == "fp32":
+        return (torch.float32, None, "fp32")
+    
+    if precision == "bf16":
+        if force_fp16:
+            print("Warning: --force-fp16 ignored; --precision bf16 is explicit")
+        if not _bf16_supported():
+            print(f"Warning: bf16 requested for {model_type} but this device "
+                  f"does not support bf16 natively; falling back to fp16")
+            return (torch.float16, None, "fp16")
+        return (torch.bfloat16, None, "bf16")
+    
+    if precision == "fp16":
+        dtype = _half_dtype_for(model_type, force_fp16=force_fp16)
+        label = "bf16" if dtype == torch.bfloat16 else "fp16"
+        return (dtype, None, label)
+    
+    if precision == "mixed":
+        # FLUX keeps the legacy behavior of loading directly in bf16 for
+        # "mixed" (no real fp32-weights-with-autocast mixing); SD1.5/SD3 do
+        # true mixed (fp32 weights + autocast).
+        if model_type in ("flux_schnell", "flux_dev"):
+            ac = torch.float16 if force_fp16 else (
+                torch.bfloat16 if _bf16_supported() else torch.float16
+            )
+            label = f"flux-half({'bf16' if ac == torch.bfloat16 else 'fp16'})"
+            return (ac, ac, label)
+        ac = _half_dtype_for(model_type, force_fp16=force_fp16)
+        label = f"mixed({'bf16' if ac == torch.bfloat16 else 'fp16'})"
+        return (torch.float32, ac, label)
+    
+    # Unknown precision — pass through.
+    return (torch.float32, None, precision)
 
 def get_test_prompts():
     """Get a set of test prompts suitable for both SD 1.5 and SD3"""
@@ -213,14 +270,19 @@ def get_benchmark_images_dir():
     images_dir = os.path.join(project_root, "benchmark_results", "images")
     return images_dir
 
-def load_sd15_pipeline(model_id, precision, device):
-    """Load Stable Diffusion 1.5 pipeline"""
+def load_sd15_pipeline(model_id, precision, device, half_dtype):
+    """Load Stable Diffusion 1.5 pipeline.
+    
+    For SD1.5, `half_dtype` is normally `torch.float16` (SD1.5 is numerically
+    fine with fp16); but if the user passed `--precision bf16` explicitly,
+    the caller will set `half_dtype = torch.bfloat16` and that's honored here.
+    """
     from diffusers import StableDiffusionPipeline
     
-    if precision == "fp16" and device.type == "cuda":
+    if precision in ("fp16", "bf16") and device.type == "cuda":
         pipeline = StableDiffusionPipeline.from_pretrained(
             model_id,
-            torch_dtype=torch.float16,
+            torch_dtype=half_dtype,
             safety_checker=None,
             requires_safety_checker=False
         )
@@ -237,8 +299,8 @@ def load_sd15_pipeline(model_id, precision, device):
             safety_checker=None,
             requires_safety_checker=False
         )
-        if precision == "fp16" and device.type != "cuda":
-            print("Warning: FP16 not supported on CPU, using FP32")
+        if precision in ("fp16", "bf16") and device.type != "cuda":
+            print(f"Warning: {precision} not supported on CPU, using FP32")
         if precision == "mixed" and device.type != "cuda":
             print("Warning: Mixed precision not supported on CPU, using FP32")
     
@@ -281,7 +343,9 @@ def load_sd3_family_pipeline(model_id, precision, device, half_dtype, cpu_offloa
     """
     from diffusers import StableDiffusion3Pipeline
     
-    if precision == "fp16":
+    if precision in ("fp16", "bf16"):
+        # For "fp16" on SD3-family, `half_dtype` is already bf16 unless the
+        # user passed --force-fp16. For "bf16", the caller forces bf16.
         torch_dtype = half_dtype
     else:
         torch_dtype = torch.float32
@@ -325,7 +389,9 @@ def load_flux_pipeline(model_id, precision, device, half_dtype, cpu_offload=Fals
     """
     from diffusers import FluxPipeline
     
-    if precision == "fp16":
+    if precision in ("fp16", "bf16"):
+        # For "fp16" on FLUX, `half_dtype` is already bf16 unless --force-fp16.
+        # For "bf16", the caller forces bf16.
         torch_dtype = half_dtype
     elif precision == "mixed":
         # Historically FLUX was loaded in bf16 for "mixed"; keep bf16 here too
@@ -424,18 +490,29 @@ def run_single_model_benchmark(model_config, params, device=None):
     
     print(f"Loading {display_name} pipeline...")
     
-    # Pick the right half-precision dtype for this model family. For SD3 /
-    # SD3.5 / FLUX this is bf16 by default (fp16 overflows MMDiT attention);
-    # SD1.5 stays on fp16. Users can pass --force-fp16 for A/B comparison.
+    # Resolve the user-facing --precision request into concrete dtypes + a
+    # label for reporting. For SD3 / SD3.5 / FLUX a "fp16" request silently
+    # upgrades to bf16 (fp16 overflows MMDiT attention); SD1.5 stays on fp16.
+    # Users can pass --force-fp16 for A/B comparison, or --precision bf16 to
+    # request bf16 explicitly regardless of model family.
     force_fp16 = bool(getattr(params, 'force_fp16', False))
-    half_dtype = _half_dtype_for(model_type, force_fp16=force_fp16)
-    if params.precision in ("fp16", "mixed") and model_type != 'sd15':
-        print(f"Using {half_dtype} for {model_type} "
-              f"(bf16 is recommended for SD3 / SD3.5 / FLUX)")
+    load_dtype, autocast_dtype, effective_precision = _resolve_dtypes(
+        params.precision, model_type, force_fp16)
+    # `half_dtype` is what the load_* helpers expect; for "fp16"/"bf16" this
+    # is the load dtype, for "mixed" it's the autocast target (since we load
+    # in fp32 and autocast in a half dtype).
+    half_dtype = load_dtype if params.precision in ("fp16", "bf16") else (
+        autocast_dtype if autocast_dtype is not None else load_dtype
+    )
+    if params.precision != effective_precision:
+        print(f"[precision] --precision {params.precision} on {model_type} "
+              f"→ effective: {effective_precision}")
+    else:
+        print(f"[precision] effective: {effective_precision}")
     
     # Load the appropriate pipeline based on model type
     if model_type == 'sd15':
-        pipeline = load_sd15_pipeline(model_id, params.precision, device)
+        pipeline = load_sd15_pipeline(model_id, params.precision, device, half_dtype)
     elif model_type in ('sd3', 'sd35_medium', 'sd3_turbo'):
         pipeline = load_sd3_family_pipeline(
             model_id, params.precision, device, half_dtype, params.cpu_offload)
@@ -473,11 +550,15 @@ def run_single_model_benchmark(model_config, params, device=None):
         else:
             return 7.5
     
-    use_mixed = params.precision == "mixed" and device.type == "cuda"
-    # Autocast dtype must match the dtype we'd have loaded the model in for
-    # pure-fp16 / bf16 runs, otherwise SD3/FLUX overflow fp16 even under
-    # autocast (activations, not just weights, are the source of overflow).
-    autocast_dtype = half_dtype
+    # Use autocast only for true "mixed" (SD1.5 / SD3 family). FLUX "mixed" is
+    # handled as direct bf16 load by _resolve_dtypes (autocast_dtype returned
+    # non-None but loading already happens in that dtype — skip autocast).
+    use_mixed = (
+        params.precision == "mixed"
+        and device.type == "cuda"
+        and autocast_dtype is not None
+        and model_type not in ("flux_schnell", "flux_dev")
+    )
     guidance = _guidance_scale()
     
     # Silence diffusers' per-step tqdm during warmup + benchmark. Each pipeline
@@ -590,7 +671,10 @@ def run_single_model_benchmark(model_config, params, device=None):
     print(f"{'-'*50}")
     print(f"Model: {display_name}")
     print(f"Model Type: {model_type.upper()}")
-    print(f"Precision: {params.precision}")
+    if effective_precision != params.precision:
+        print(f"Precision: {params.precision} (effective: {effective_precision})")
+    else:
+        print(f"Precision: {effective_precision}")
     print(f"Batch size: {params.batch_size}")
     print(f"Image size: {params.height}x{params.width}")
     print(f"Inference steps: {params.num_inference_steps}")
@@ -647,6 +731,7 @@ def run_single_model_benchmark(model_config, params, device=None):
         'model': display_name,
         'model_type': model_type,
         'precision': params.precision,
+        'effective_precision': effective_precision,
         'batch_size': params.batch_size,
         'image_size': f"{params.height}x{params.width}",
         'inference_steps': params.num_inference_steps,
@@ -843,7 +928,9 @@ def run_inference(params):
             print(f"[FAIL] {result['model']}: FAILED - {result['error']}")
         else:
             memory_str = f"{result['memory_usage_gb']:.1f} GB" if result['memory_usage_gb'] is not None else "N/A"
-            print(f"[PASS] {result['model']}: {result['avg_images_per_second']:.2f} images/sec, {memory_str} VRAM")
+            prec_str = result.get('effective_precision') or result.get('precision', '?')
+            print(f"[PASS] {result['model']} [{prec_str}]: "
+                  f"{result['avg_images_per_second']:.2f} images/sec, {memory_str} VRAM")
     
     print(f"{'='*60}")
     print("Benchmark completed!")
@@ -866,16 +953,21 @@ def main():
     
     # Precision settings
     parser.add_argument('--precision', type=str, default='fp16',
-                        choices=['fp32', 'fp16', 'mixed'],
-                        help='Precision mode (default: fp16). Note: for SD3 / '
-                             'SD3.5 / FLUX the "fp16" slot actually uses bf16 '
-                             'under the hood — their MMDiT attention overflows '
-                             'fp16. Use --force-fp16 to override.')
+                        choices=['fp32', 'fp16', 'bf16', 'mixed'],
+                        help='Precision mode (default: fp16). "bf16" loads '
+                             'the model directly in torch.bfloat16 (explicit, '
+                             'honored regardless of model family). "fp16" on '
+                             'SD3 / SD3.5 / FLUX silently upgrades to bf16 '
+                             'because their MMDiT attention overflows fp16; '
+                             'pass --force-fp16 to disable that swap. The '
+                             'run header and results always show which dtype '
+                             'actually ran (the "effective precision").')
     parser.add_argument('--force-fp16', action='store_true',
                         help='Force actual torch.float16 for SD3 / SD3.5 / '
                              'FLUX when --precision fp16 or mixed is chosen. '
                              'Useful only for fp16-vs-bf16 A/B comparison; '
-                             'expect NaN / black outputs on some prompts.')
+                             'expect NaN / black outputs on some prompts. '
+                             'Ignored when --precision bf16 is explicit.')
     
     # Generation parameters
     parser.add_argument('--batch_size', type=int, default=1,

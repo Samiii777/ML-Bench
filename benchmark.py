@@ -749,12 +749,19 @@ class BenchmarkRunner:
                     for precision in precisions:
                         for batch_size in batch_sizes_for_use_case:
                             for execution_provider in execution_providers:
-                                # Skip FP16 on CPU (allow on CUDA or MPS)
+                                # Skip FP16 / BF16 on CPU (allow on CUDA or MPS)
                                 has_gpu = torch.cuda.is_available() or (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available())
-                                if precision == "fp16" and not has_gpu:
+                                if precision in ("fp16", "bf16") and not has_gpu:
                                     continue
-                                # Skip FP16 for CPU execution provider in ONNX
-                                if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
+                                # Skip FP16 / BF16 for CPU execution provider in ONNX
+                                if framework == "onnx" and precision in ("fp16", "bf16") and execution_provider == "CPUExecutionProvider":
+                                    continue
+                                # bf16 is wired through only for SD / FLUX PyTorch benchmarks
+                                if precision == "bf16" and framework != "pytorch":
+                                    continue
+                                if precision == "bf16" and not str(model).lower().startswith((
+                                    "stable_diffusion", "sd1", "sd3", "sd35", "flux"
+                                )):
                                     continue
                                 total += 1
         
@@ -873,13 +880,23 @@ class BenchmarkRunner:
                 for precision in precisions:
                     for batch_size in batch_sizes_for_use_case:
                         for execution_provider in execution_providers:
-                            # Skip FP16 on CPU (allow on CUDA or MPS)
+                            # Skip FP16 / BF16 on CPU (allow on CUDA or MPS)
                             has_gpu = torch.cuda.is_available() or (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available())
-                            if precision == "fp16" and not has_gpu:
+                            if precision in ("fp16", "bf16") and not has_gpu:
                                 continue
                             
-                            # Skip FP16 for CPU execution provider in ONNX
-                            if framework == "onnx" and precision == "fp16" and execution_provider == "CPUExecutionProvider":
+                            # Skip FP16 / BF16 for CPU execution provider in ONNX
+                            if framework == "onnx" and precision in ("fp16", "bf16") and execution_provider == "CPUExecutionProvider":
+                                continue
+                            
+                            # bf16 is currently only wired through for the SD
+                            # benchmark (other subprocess scripts don't accept
+                            # it as a --precision choice and would hard-fail).
+                            if precision == "bf16" and framework != "pytorch":
+                                continue
+                            if precision == "bf16" and not str(model).lower().startswith((
+                                "stable_diffusion", "sd1", "sd3", "sd35", "flux"
+                            )):
                                 continue
                             
                             current_test += 1
@@ -1425,8 +1442,10 @@ def main():
                        choices=["classification", "detection", "segmentation", "generation", "compute", "text_generation", "text_classification"],
                        help="Use case for the benchmark (default: comprehensive - all use cases)")
     parser.add_argument("--precision", type=str, nargs='*',
-                       choices=["fp32", "fp16", "mixed", "int8"],
-                       help="Precision for inference (default: all available)")
+                       choices=["fp32", "fp16", "bf16", "mixed", "int8"],
+                       help="Precision for inference (default: all available). "
+                            "bf16 is primarily for SD3/SD3.5/FLUX (MMDiT overflows "
+                            "fp16); other benchmarks may not implement it.")
     parser.add_argument("--batch_size", type=int, nargs='*',
                        help="Batch size for inference (default: test multiple sizes)")
     parser.add_argument("--output_dir", type=str, default="benchmark_results",
