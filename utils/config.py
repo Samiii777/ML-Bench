@@ -7,121 +7,79 @@ SKIP_VRAM_CHECK = False  # Set to True to disable VRAM requirement checking
 
 # Model family mappings
 MODEL_FAMILIES = {
-    'resnet18': 'resnet',
-    'resnet34': 'resnet', 
+    # Classification — one canonical model per architecture
     'resnet50': 'resnet',
-    'resnet101': 'resnet',
-    'resnet152': 'resnet',
-    # InceptionV3 models
     'inceptionv3': 'inception',
     'inception_v3': 'inception',
-    # YOLOv5 models  
+    'vit_b_16': 'vit',
+    'convnext_tiny': 'convnext',
+    # Detection — one real-world model
     'yolov5s': 'yolo',
-    'yolov5m': 'yolo',
-    'yolov5l': 'yolo',
-    'yolov5x': 'yolo',
-    'yolov5': 'yolo',
-    # BERT models
+    # NLP
     'bert-base-uncased': 'bert',
-    'bert-base-cased': 'bert',
-    'bert-large-uncased': 'bert',
-    'bert-large-cased': 'bert',
     'bert': 'bert',
+    # Image generation
     'stable_diffusion_1_5': 'stable_diffusion',
     'sd1.5': 'stable_diffusion',
-    'sd15': 'stable_diffusion',
     'stable_diffusion_3_medium': 'stable_diffusion',
-    'sd3_medium': 'stable_diffusion',
     'sd3': 'stable_diffusion',
-    'stable_diffusion_3_5_medium': 'stable_diffusion',
-    'sd3.5_medium': 'stable_diffusion',
-    'sd35_medium': 'stable_diffusion',
-    'sd3.5': 'stable_diffusion',
-    'stable_diffusion_3_5_large_turbo': 'stable_diffusion',
-    'sd3.5_turbo': 'stable_diffusion',
-    'sd35_turbo': 'stable_diffusion',
     'flux_1_schnell': 'flux',
-    'flux1_schnell': 'flux',
     'flux_schnell': 'flux',
-    'flux.1-schnell': 'flux',
     'flux_1_dev': 'flux',
-    'flux1_dev': 'flux',
     'flux_dev': 'flux',
-    'flux.1-dev': 'flux',
-    'flux': 'flux',
-    'gpu_ops': 'gpu_ops',
+    # GPU compute
     'gemm_ops': 'gpu_ops',
     'conv_ops': 'gpu_ops',
     'memory_ops': 'gpu_ops',
     'elementwise_ops': 'gpu_ops',
     'reduction_ops': 'gpu_ops',
-    'llama': 'llama',
-    'llama-3': 'llama',
-    'llama3': 'llama',
+    # LLMs
     'meta-llama/Llama-3.1-8B': 'llama',
     'meta-llama/Llama-3.2-1B-Instruct': 'llama',
     'meta-llama/Llama-3.2-3B-Instruct': 'llama',
-    # DeepSeek reasoning models
     'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B': 'llama',
-    'deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B': 'llama',
-    'deepseek-ai/DeepSeek-R1-Distill-Llama-8B': 'llama',
-    'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B': 'llama',
-    # Ollama models
+    # Ollama
     'llama3.1:8b': 'ollama',
     'qwen2.5:7b': 'ollama',
-    'gpt-oss:20b': 'ollama',
     'deepseek-r1:8b': 'ollama',
     'gemma3:4b': 'ollama',
     'qwen3:8b': 'ollama',
-    'qwen3:14b': 'ollama',
     'llama3.2:3b': 'ollama',
-    # ViT models
-    'vit_b_16': 'vit',
-    'vit_b_32': 'vit',
-    'vit_l_16': 'vit',
-    'vit_l_32': 'vit',
-    # ConvNeXt models
-    'convnext_tiny': 'convnext',
-    'convnext_small': 'convnext',
-    'convnext_base': 'convnext',
-    'convnext_large': 'convnext',
-    # ComfyUI models
+    # ComfyUI
     'comfyui_flux_schnell': 'comfyui',
     'comfyui_flux_dev': 'comfyui',
-    'comfyui': 'comfyui',
 }
 
 # Available models per framework
 PYTORCH_MODELS = [
-    "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
-    "inceptionv3", "inception_v3",
-    "yolov5s", "yolov5m", "yolov5l", "yolov5x", "yolov5",
-    "bert-base-uncased", "bert-base-cased", "bert-large-uncased", "bert-large-cased", "bert",
-    "stable_diffusion_1_5", "sd1.5", "sd15",
-    "stable_diffusion_3_medium", "sd3_medium", "sd3",
-    "stable_diffusion_3_5_medium", "sd3.5_medium", "sd35_medium", "sd3.5",
-    "stable_diffusion_3_5_large_turbo", "sd3.5_turbo", "sd35_turbo",
-    "flux_1_schnell", "flux1_schnell", "flux_schnell", "flux.1-schnell",
-    "flux_1_dev", "flux1_dev", "flux_dev", "flux.1-dev", "flux",
-    "vit_b_16", "vit_b_32", "vit_l_16", "vit_l_32",
-    "convnext_tiny", "convnext_small", "convnext_base", "convnext_large",
+    # Classification — one canonical model per architecture
+    "resnet50",
+    "inceptionv3",
+    "vit_b_16",
+    "convnext_tiny",
+    # Detection
+    "yolov5s",
+    # NLP
+    "bert-base-uncased",
+    # Image generation
+    "stable_diffusion_1_5", "sd1.5",
+    "stable_diffusion_3_medium", "sd3",
+    "flux_1_schnell", "flux_schnell",
+    "flux_1_dev", "flux_dev",
+    # GPU compute
     "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",
-    "llama", "llama-3", "llama3",
+    # LLMs
+    "meta-llama/Llama-3.2-1B-Instruct",
+    "meta-llama/Llama-3.2-3B-Instruct",
     "meta-llama/Llama-3.1-8B",
-    "meta-llama/Llama-3.2-1B-Instruct", "meta-llama/Llama-3.2-3B-Instruct",
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B", "deepseek-ai/Deepseek-R1-Distill-Qwen-1.5B",
-    "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
-    "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
+    "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
 ]
 OLLAMA_MODELS = [
     "llama3.1:8b",
-    "qwen2.5:7b",
-    "gpt-oss:20b",
+    "llama3.2:3b",
+    "qwen3:8b",
     "deepseek-r1:8b",
     "gemma3:4b",
-    "qwen3:8b",
-    "qwen3:14b",
-    "llama3.2:3b",
 ]
 
 COMFYUI_MODELS = [
@@ -130,10 +88,9 @@ COMFYUI_MODELS = [
 ]
 
 ONNX_MODELS = [
-    "resnet18", "resnet34", "resnet50", "resnet101", "resnet152",
-    "inceptionv3", "inception_v3",
-    "yolov5s", "yolov5m", "yolov5l", "yolov5x", "yolov5",
-    "bert-base-uncased", "bert-base-cased", "bert-large-uncased", "bert-large-cased", "bert"
+    "resnet50",
+    "inceptionv3",
+    "yolov5s",
 ]
 
 # ONNX Execution Providers (dynamically detected)
