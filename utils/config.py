@@ -75,6 +75,16 @@ MODEL_FAMILIES = {
     'qwen3:8b': 'ollama',
     'qwen3:14b': 'ollama',
     'llama3.2:3b': 'ollama',
+    # ViT models
+    'vit_b_16': 'vit',
+    'vit_b_32': 'vit',
+    'vit_l_16': 'vit',
+    'vit_l_32': 'vit',
+    # ConvNeXt models
+    'convnext_tiny': 'convnext',
+    'convnext_small': 'convnext',
+    'convnext_base': 'convnext',
+    'convnext_large': 'convnext',
     # ComfyUI models
     'comfyui_flux_schnell': 'comfyui',
     'comfyui_flux_dev': 'comfyui',
@@ -93,6 +103,8 @@ PYTORCH_MODELS = [
     "stable_diffusion_3_5_large_turbo", "sd3.5_turbo", "sd35_turbo",
     "flux_1_schnell", "flux1_schnell", "flux_schnell", "flux.1-schnell",
     "flux_1_dev", "flux1_dev", "flux_dev", "flux.1-dev", "flux",
+    "vit_b_16", "vit_b_32", "vit_l_16", "vit_l_32",
+    "convnext_tiny", "convnext_small", "convnext_base", "convnext_large",
     "gemm_ops", "conv_ops", "memory_ops", "elementwise_ops", "reduction_ops",
     "llama", "llama-3", "llama3",
     "meta-llama/Llama-3.1-8B",
@@ -391,9 +403,11 @@ def get_default_use_case_for_model(model_name):
     elif model_family == "flux":
         return "generation"  # FLUX Schnell is a generation model
     elif model_family == "comfyui":
-        return "generation"  # ComfyUI is for image generation
+        return "generation"
+    elif model_family in ("vit", "convnext"):
+        return "classification"
     else:
-        return "classification"  # Default fallback
+        return "classification"
 
 def get_available_frameworks_for_model(model_name):
     """Get list of available frameworks for a specific model"""
@@ -418,9 +432,11 @@ def get_available_frameworks_for_model(model_name):
     elif model_family == "comfyui":
         return ["comfyui"]  # Only ComfyUI framework for ComfyUI models
     elif model_family == "ollama":
-        return ["ollama"] # Only Ollama for Ollama models
+        return ["ollama"]
+    elif model_family in ("vit", "convnext"):
+        return ["pytorch"]
     else:
-        return ["pytorch"]  # Default to PyTorch only
+        return ["pytorch"]
 
 def get_models_for_use_case(use_case, framework="pytorch"):
     """Get list of models that are compatible with a specific use case"""
