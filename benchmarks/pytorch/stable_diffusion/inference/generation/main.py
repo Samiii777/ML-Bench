@@ -493,10 +493,22 @@ def run_single_model_benchmark(model_config, params, device=None):
     use_mixed = params.precision == "mixed" and device.type == "cuda"
     guidance = _guidance_scale()
     
-    # Warmup with same step count as benchmark for consistent behavior
-    print(f"Performing warm-up runs (5 iterations, {params.num_inference_steps} steps)...")
-    for i in range(5):
-        print(f"Warm-up {i+1}/5...")
+    # Silence diffusers' per-step tqdm during warmup + benchmark. Each pipeline
+    # call already takes many seconds on large models and the per-step progress
+    # bar adds noticeable host overhead plus log spam, especially on slower
+    # backends (AMD ROCm without xformers, CPU). Failing silently if the
+    # pipeline API doesn't expose this hook is fine.
+    try:
+        pipeline.set_progress_bar_config(disable=True)
+    except Exception:
+        pass
+    
+    # Warmup: a single full-shape iteration is enough to prime cuDNN/MIOpen
+    # autotune. On slow devices each SD iteration can take minutes, so 5 warmup
+    # iterations multiplies the wall-clock cost by 5× with no statistical gain.
+    num_warmup = max(1, params.num_warmup) if hasattr(params, 'num_warmup') else 1
+    print(f"Performing warm-up ({num_warmup} iteration, {params.num_inference_steps} steps)...")
+    for i in range(num_warmup):
         with torch.inference_mode():
             gen_kwargs = {
                 'prompt': prompt,
@@ -522,8 +534,10 @@ def run_single_model_benchmark(model_config, params, device=None):
     # Reset peak memory after warmup for clean benchmark-only measurement
     reset_memory_tracking(device)
     
-    # Benchmark runs — enforce a minimum sample size for meaningful statistics
-    num_runs = max(params.num_runs, 10)
+    # Benchmark runs. Fully respect --num-runs — each SD iteration can take
+    # many seconds to minutes on slow backends, so forcing a floor here would
+    # turn a slow backend into a multi-hour run with no way to escape.
+    num_runs = max(1, params.num_runs)
     timer = BenchmarkTimer(device)
     times_ms = []
     all_images = []
@@ -808,8 +822,13 @@ def main():
                         help='Guidance scale for SD3 (default: 4.5)')
     
     # Benchmark settings
-    parser.add_argument('--num-runs', type=int, default=10,
-                        help='Number of benchmark runs (default: 10)')
+    parser.add_argument('--num-runs', type=int, default=3,
+                        help='Number of benchmark runs (default: 3). Each run executes '
+                             'num_inference_steps denoising steps, which can take minutes '
+                             'on slow backends; bump for tighter percentiles.')
+    parser.add_argument('--num-warmup', type=int, default=1,
+                        help='Number of warmup runs before timing (default: 1). A single '
+                             'full-shape warmup is enough to prime cuDNN/MIOpen autotune.')
     
     # Memory optimization
     parser.add_argument('--cpu-offload', action='store_true',
