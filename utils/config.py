@@ -123,13 +123,12 @@ DEFAULT_FRAMEWORKS = ["pytorch", "onnx", "ollama"]
 DEFAULT_PRECISIONS = ["fp32", "fp16", "mixed"]
 DEFAULT_TRAINING_PRECISIONS = ["fp32", "mixed"]  # No pure fp16 for training
 DEFAULT_USE_CASE_PRECISIONS = {
-    "classification": ["fp32", "fp16", "mixed"],
-    "detection": ["fp32", "fp16", "mixed"],
-    "segmentation": ["fp32", "fp16", "mixed"],
-    "generation": ["fp32", "fp16", "mixed"],
-    "compute": ["fp32", "fp16", "mixed"],
-    "text_generation": ["fp16"],  # Skip fp32 for LLMs - slower and uses more memory
-    "text_classification": ["fp32", "fp16", "mixed"]
+    "classification": ["fp16"],
+    "detection": ["fp16"],
+    "generation": ["fp16"],         # SD/FLUX auto-select bf16 where needed
+    "compute": ["fp32", "fp16"],    # Both matter — different hardware paths
+    "text_generation": ["fp16"],
+    "text_classification": ["fp16"],
 }
 
 # Framework-specific precision overrides
@@ -141,7 +140,7 @@ FRAMEWORK_PRECISION_OVERRIDES = {
         "generation": ["fp16"]  # ComfyUI FLUX models use FP16
     }
 }
-DEFAULT_BATCH_SIZES = [1, 2, 4, 8, 16, 32, 64]
+DEFAULT_BATCH_SIZES = [1]
 DEFAULT_TRAINING_BATCH_SIZES = {
     "classification": [64],      # Large batch size works for classification
     "detection": [8],           # Smaller batch size needed for detection  
