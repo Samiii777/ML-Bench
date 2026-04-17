@@ -88,13 +88,29 @@ class BenchmarkResult:
         return None
 
     def to_legacy_metrics(self) -> Dict[str, Any]:
-        """Convert to the dict format that benchmark.py _parse_benchmark_output returns."""
+        """Convert to the dict format that benchmark.py _parse_benchmark_output returns.
+
+        The results display (utils/results.py) expects specific key names:
+        throughput_fps, avg_latency_ms, inference_time_ms, tokens_per_second,
+        best_gflops, best_bandwidth_gbs, seconds_per_image, etc.
+        """
+        NAME_MAP = {
+            "throughput": "throughput_fps",
+            "avg_latency_ms": "avg_latency_ms",
+            "peak_memory_gb": "gpu_memory_allocated_gb",
+            "tokens_per_second": "tokens_per_second",
+            "best_gflops": "best_gflops",
+            "best_bandwidth_gbs": "best_bandwidth_gbs",
+            "seconds_per_image": "seconds_per_image",
+        }
+
         legacy: Dict[str, Any] = {}
         legacy["device"] = self.system_info.device
         legacy["framework"] = self.framework
 
         for m in self.metrics:
-            legacy[m.name] = m.value
+            key = NAME_MAP.get(m.name, m.name)
+            legacy[key] = m.value
 
         if self.latency_stats:
             if "mean" in self.latency_stats:
