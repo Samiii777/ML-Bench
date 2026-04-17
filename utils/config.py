@@ -140,7 +140,7 @@ FRAMEWORK_PRECISION_OVERRIDES = {
         "generation": ["fp16"]  # ComfyUI FLUX models use FP16
     }
 }
-DEFAULT_BATCH_SIZES = [1]
+DEFAULT_BATCH_SIZES = [1, 4, 16]
 DEFAULT_TRAINING_BATCH_SIZES = {
     "classification": [64],      # Large batch size works for classification
     "detection": [8],           # Smaller batch size needed for detection  
@@ -151,13 +151,21 @@ DEFAULT_TRAINING_BATCH_SIZES = {
     "text_classification": [32] # Medium batch size for text classification
 }
 
-# Framework-specific batch size overrides
+USE_CASE_BATCH_SIZES = {
+    "classification": [1, 4, 16],
+    "detection": [1, 4],
+    "generation": [1, 2],           # VRAM-heavy, bs>2 OOMs on most GPUs for SD3/FLUX
+    "compute": [1],                  # Raw ops, batch size is baked into the operation
+    "text_generation": [1],          # Autoregressive, batching = concurrent sequences
+    "text_classification": [1, 4, 16],
+}
+
 FRAMEWORK_BATCH_SIZE_OVERRIDES = {
     "ollama": {
-        "text_generation": [1]  # Ollama handles batching internally, just use 1
+        "text_generation": [1]
     },
     "comfyui": {
-        "generation": [1]  # ComfyUI generates one image at a time
+        "generation": [1]
     }
 }
 DEFAULT_FRAMEWORK = "pytorch"
@@ -483,7 +491,7 @@ def get_batch_sizes_for_use_case(use_case, mode="inference", framework="pytorch"
     if mode == "training":
         return get_training_batch_sizes_for_use_case(use_case)
     else:
-        return DEFAULT_BATCH_SIZES
+        return USE_CASE_BATCH_SIZES.get(use_case, DEFAULT_BATCH_SIZES)
 
 def should_skip_use_case_for_mode(use_case, mode, framework):
     """Check if a use case should be skipped for a specific mode and framework"""
