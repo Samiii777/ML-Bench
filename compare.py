@@ -17,13 +17,62 @@ def load_csv_file(file_path):
         if not Path(file_path).exists():
             print(f"Error: File '{file_path}' not found")
             return None
-            
+
         df = pd.read_csv(file_path)
         print(f"Loaded {len(df)} rows from {file_path}")
         return df
     except Exception as e:
         print(f"Error loading {file_path}: {e}")
         return None
+
+
+def load_json_results(file_path):
+    """Load benchmark results from a JSON file and convert to DataFrame."""
+    import json
+    try:
+        if not Path(file_path).exists():
+            print(f"Error: File '{file_path}' not found")
+            return None
+
+        with open(file_path) as f:
+            data = json.load(f)
+
+        results = data.get("results", data if isinstance(data, list) else [data])
+        rows = []
+        for r in results:
+            row = {
+                "framework": r.get("framework", ""),
+                "model": r.get("model", ""),
+                "mode": r.get("mode", ""),
+                "usecase": r.get("usecase", r.get("use_case", "")),
+                "precision": r.get("precision", ""),
+                "batch_size": r.get("batch_size", 1),
+                "status": r.get("status", ""),
+            }
+            metrics = r.get("metrics", {})
+            if isinstance(metrics, dict):
+                for k, v in metrics.items():
+                    row[f"metric_{k}"] = v
+            elif isinstance(metrics, list):
+                for m in metrics:
+                    if isinstance(m, dict) and "name" in m:
+                        row[f"metric_{m['name']}"] = m.get("value", 0)
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+        print(f"Loaded {len(df)} results from {file_path}")
+        return df
+    except Exception as e:
+        print(f"Error loading JSON {file_path}: {e}")
+        return None
+
+
+def load_result_file(file_path):
+    """Auto-detect file format and load results."""
+    p = Path(file_path)
+    if p.suffix == ".json":
+        return load_json_results(file_path)
+    return load_csv_file(file_path)
 
 def calculate_percentage_change(old_value, new_value):
     """Calculate percentage change from old to new value"""
@@ -503,9 +552,9 @@ def main():
             print("Error: column-names must have the same number of names as baseline-columns")
             sys.exit(1)
     
-    # Load CSV files
-    df1 = load_csv_file(args.baseline_file)
-    df2 = load_csv_file(args.comparison_file)
+    # Load result files (auto-detect CSV or JSON)
+    df1 = load_result_file(args.baseline_file)
+    df2 = load_result_file(args.comparison_file)
     
     if df1 is None or df2 is None:
         sys.exit(1)

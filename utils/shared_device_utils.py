@@ -15,8 +15,11 @@ def detect_gpu_vendor():
     Detect GPU vendor (NVIDIA, AMD, or Intel)
     Returns: 'nvidia', 'amd', 'intel', or 'unknown'
     """
+    import platform as _plat
     try:
-        # Try lspci first (most reliable on Linux)
+        # Try lspci first (most reliable on Linux, not available on Windows/macOS)
+        if _plat.system() == "Windows":
+            raise FileNotFoundError("lspci not available on Windows")
         result = subprocess.run(['lspci'], capture_output=True, text=True, timeout=2)
         if result.returncode == 0:
             output = result.stdout.lower()
@@ -279,10 +282,13 @@ def _read_gpu_memory_nvml():
 
 def _read_gpu_memory_from_files():
     """
-    Try to read GPU memory directly from Linux files (fallback method)
+    Try to read GPU memory directly from Linux sysfs (fallback method).
+    Only works on Linux with AMD GPUs.
     """
+    import platform as _plat
+    if _plat.system() != "Linux":
+        return None
     try:
-        # For AMD GPUs, try reading from debugfs or sysfs
         amd_files = [
             "/sys/class/drm/card0/device/mem_info_vram_used",
             "/sys/class/drm/card0/device/mem_info_vram_total",
@@ -428,4 +434,73 @@ def print_system_info():
     else:
         print("GPU Memory: Not available")
     
-    print("=" * 50) 
+    print("=" * 50)
+
+
+def collect_system_fingerprint() -> dict:
+    """Collect comprehensive system info for reproducibility.
+
+    Returns a dict whose keys match ``core.schema.SystemInfo`` fields.
+    All probes are best-effort — failures return empty strings.
+    """
+    import platform as _platform
+    import subprocess as _sp
+    import sys as _sys
+
+    info: dict = {
+        "python_version": _sys.version.split()[0],
+        "platform": _platform.platform(),
+        "kernel_version": _platform.release(),
+        "hostname": _platform.node(),
+    }
+
+    # CPU model
+    try:
+        if _platform.system() == "Linux":
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if line.startswith("model name"):
+                        info["cpu_model"] = line.split(":", 1)[1].strip()
+                        break
+        elif _platform.system() == "Darwin":
+            out = _sp.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                          capture_output=True, text=True, timeout=5)
+            info["cpu_model"] = out.stdout.strip()
+    except Exception:
+        pass
+
+    # PyTorch / GPU stack versions
+    try:
+        import torch
+        info["torch_version"] = torch.__version__
+        cuda_ver = getattr(torch.version, "cuda", None)
+        hip_ver = getattr(torch.version, "hip", None)
+        if hip_ver:
+            info["rocm_version"] = hip_ver
+        if cuda_ver:
+            info["cuda_version"] = cuda_ver
+    except ImportError:
+        pass
+
+    # GPU driver version
+    try:
+        if _platform.system() != "Windows":
+            # AMD
+            out = _sp.run(["rocm-smi", "--showdriverversion"],
+                          capture_output=True, text=True, timeout=5)
+            if out.returncode == 0:
+                for line in out.stdout.splitlines():
+                    if "Driver version" in line or "driver" in line.lower():
+                        info["gpu_driver_version"] = line.split(":")[-1].strip()
+                        break
+        if "gpu_driver_version" not in info:
+            cmd = ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"]
+            if _platform.system() == "Windows":
+                cmd[0] = r"C:\Windows\System32\nvidia-smi.exe"
+            out = _sp.run(cmd, capture_output=True, text=True, timeout=5)
+            if out.returncode == 0:
+                info["gpu_driver_version"] = out.stdout.strip().split("\n")[0]
+    except Exception:
+        pass
+
+    return info

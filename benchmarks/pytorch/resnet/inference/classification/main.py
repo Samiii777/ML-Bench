@@ -18,6 +18,7 @@ from PIL import Image
 from core.harness import InferenceHarness
 from core.schema import MetricEntry, BenchmarkMeta
 from core.args import build_base_parser
+from core.validation import ResultValidator
 from utils.download import get_imagenet_classes_path, get_sample_image_path
 
 BENCHMARK_META = BenchmarkMeta(
@@ -87,9 +88,16 @@ class ResNetClassificationBenchmark(InferenceHarness):
         for i in range(5):
             print(f"{categories[top5_idx[i]]}: {top5_prob[i].item():.4f}")
 
+        self._top1_class = categories[top5_idx[0]]
+        self._top1_confidence = top5_prob[0].item()
+
         return [
-            MetricEntry("top1_prediction_confidence", top5_prob[0].item(), "probability", "higher_is_better"),
+            MetricEntry("top1_prediction_confidence", self._top1_confidence, "probability", "higher_is_better"),
         ]
+
+    def validate_result(self, model, inputs, outputs, validator: ResultValidator):
+        validator.expect_equals("top1_class", self._top1_class, "Samoyed")
+        validator.expect_greater_than("top1_confidence", self._top1_confidence, 0.1)
 
 
 if __name__ == "__main__":

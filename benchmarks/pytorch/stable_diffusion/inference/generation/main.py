@@ -28,6 +28,8 @@ for parent in project_root.parents:
 # Clean import of utils - no ugly relative paths!
 import utils
 from utils.shared_device_utils import get_gpu_memory_efficient
+from core.schema import BenchmarkResult, MetricEntry, SystemInfo
+from core.output import emit_result
 
 def get_gpu_memory_nvidia_smi():
     """Get GPU memory using nvidia-smi directly"""
@@ -725,7 +727,36 @@ def run_single_model_benchmark(model_config, params, device=None):
     # Clean up pipeline to free memory
     del pipeline
     torch.cuda.empty_cache() if torch.cuda.is_available() else None
-    
+
+    # Emit structured JSON result
+    _metrics = [
+        MetricEntry("avg_latency_ms", avg_latency_ms, "ms", "lower_is_better"),
+        MetricEntry("throughput", avg_images_per_second, "images/sec", "higher_is_better"),
+        MetricEntry("seconds_per_image", avg_time_per_image, "seconds", "lower_is_better"),
+    ]
+    if peak_mem:
+        _metrics.append(MetricEntry("peak_memory_gb", peak_mem.get("peak_allocated_gb", 0), "GB", "lower_is_better"))
+    _si = SystemInfo(device=str(device))
+    if torch.cuda.is_available():
+        _si.device_name = torch.cuda.get_device_name(0)
+        _si.gpu_memory_total_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        _si.gpu_vendor = "amd" if getattr(torch.version, "hip", None) else "nvidia"
+        _si.torch_version = torch.__version__
+    _bench_result = BenchmarkResult(
+        status="PASS",
+        framework="pytorch",
+        model=display_name,
+        mode="inference",
+        use_case="generation",
+        precision=effective_precision,
+        batch_size=params.batch_size,
+        system_info=_si,
+        metrics=_metrics,
+        latency_stats=stats,
+        input_resolution=f"{params.height}x{params.width}",
+    )
+    emit_result(_bench_result)
+
     # Return results for potential further processing
     return {
         'model': display_name,

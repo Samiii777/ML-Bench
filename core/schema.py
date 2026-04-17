@@ -26,6 +26,14 @@ class SystemInfo:
     torch_version: str = ""
     gpu_vendor: str = "unknown"
     gpu_memory_total_gb: Optional[float] = None
+    gpu_driver_version: str = ""
+    rocm_version: str = ""
+    cuda_version: str = ""
+    kernel_version: str = ""
+    python_version: str = ""
+    platform: str = ""
+    cpu_model: str = ""
+    hostname: str = ""
 
 
 @dataclass
@@ -50,6 +58,9 @@ class BenchmarkResult:
     system_info: SystemInfo = field(default_factory=SystemInfo)
     metrics: List[MetricEntry] = field(default_factory=list)
     latency_stats: Dict[str, float] = field(default_factory=dict)
+    model_architecture: str = ""
+    input_resolution: str = ""
+    validation_checks: List[Dict] = field(default_factory=list)
     error: Optional[str] = None
     schema_version: str = SCHEMA_VERSION
 
@@ -71,13 +82,17 @@ class BenchmarkResult:
 
         si = d.pop("system_info", {})
         if isinstance(si, dict):
-            si = SystemInfo(**si)
+            known_si = {f.name for f in SystemInfo.__dataclass_fields__.values()}
+            si = SystemInfo(**{k: v for k, v in si.items() if k in known_si})
         d["system_info"] = si
 
         raw_metrics = d.pop("metrics", [])
         d["metrics"] = [
             MetricEntry(**m) if isinstance(m, dict) else m for m in raw_metrics
         ]
+
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        d = {k: v for k, v in d.items() if k in known}
 
         return cls(**d)
 

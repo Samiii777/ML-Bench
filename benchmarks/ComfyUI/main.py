@@ -24,7 +24,9 @@ for parent in project_root.parents:
             sys.path.insert(0, str(parent))
         break
 
-from utils.shared_device_utils import get_gpu_memory_efficient
+from utils.shared_device_utils import get_gpu_memory_efficient, collect_system_fingerprint
+from core.schema import BenchmarkResult, MetricEntry, SystemInfo
+from core.output import emit_result
 
 
 class ComfyUIServer:
@@ -560,11 +562,60 @@ def benchmark_comfyui_flux(model='comfyui_flux_schnell', num_warmup=3, num_runs=
         print(f"{'='*60}")
         
         print(f"\nFINAL RESULT: {seconds_per_image:.3f} seconds/image")
-        
+
         # Show where images are saved
         comfyui_output = comfyui_path / "output"
-        print(f"\n✓ Generated images saved to: {comfyui_output}")
-        
+        print(f"\nGenerated images saved to: {comfyui_output}")
+
+        # Build and emit structured BenchmarkResult
+        fp = collect_system_fingerprint()
+        si = SystemInfo(
+            device=device,
+            torch_version=fp.get("torch_version", torch.__version__),
+            python_version=fp.get("python_version", ""),
+            platform=fp.get("platform", ""),
+            kernel_version=fp.get("kernel_version", ""),
+            cpu_model=fp.get("cpu_model", ""),
+            hostname=fp.get("hostname", ""),
+            rocm_version=fp.get("rocm_version", ""),
+            cuda_version=fp.get("cuda_version", ""),
+            gpu_driver_version=fp.get("gpu_driver_version", ""),
+        )
+        if torch.cuda.is_available():
+            si.device_name = torch.cuda.get_device_name(0)
+            si.gpu_memory_total_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
+            si.gpu_vendor = "amd" if getattr(torch.version, "hip", None) else "nvidia"
+
+        bench_metrics = [
+            MetricEntry("seconds_per_image", seconds_per_image, "s", "lower_is_better"),
+            MetricEntry("throughput", throughput, "images/sec", "higher_is_better"),
+            MetricEntry("avg_latency_ms", avg_latency * 1000, "ms", "lower_is_better"),
+        ]
+        if memory_used_gb > 0:
+            bench_metrics.append(
+                MetricEntry("peak_memory_gb", memory_used_gb, "GB", "lower_is_better")
+            )
+
+        bench_result = BenchmarkResult(
+            status="PASS",
+            framework="comfyui",
+            model=model,
+            mode="inference",
+            use_case="generation",
+            precision="fp16",
+            batch_size=1,
+            system_info=si,
+            metrics=bench_metrics,
+            latency_stats={
+                "mean": avg_latency * 1000,
+                "std": std_latency * 1000,
+                "min": min_latency * 1000,
+                "max": max_latency * 1000,
+            },
+            input_resolution=f"{width}x{height}",
+        )
+        emit_result(bench_result)
+
         return {
             'throughput_images_per_sec': throughput,
             'avg_latency_s': avg_latency,

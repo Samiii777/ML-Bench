@@ -23,6 +23,8 @@ for parent in project_root.parents:
         break
 
 from utils.config import OLLAMA_MODELS
+from core.schema import BenchmarkResult, MetricEntry, SystemInfo
+from core.output import emit_result
 
 
 def get_model_configs():
@@ -226,6 +228,30 @@ def run_single_model_benchmark(model_config, params):
     print(f"\nCleaning up model {model_config['name']}...")
     unload_model(model_name)
     
+    # Emit structured JSON result
+    metrics = [
+        MetricEntry("avg_latency_ms", avg_time * 1000, "ms", "lower_is_better"),
+        MetricEntry("tokens_per_second", avg_throughput, "tokens/sec", "higher_is_better"),
+        MetricEntry("avg_tokens_per_run", avg_tokens, "tokens", "higher_is_better"),
+    ]
+    system_info = SystemInfo(device="ollama", device_name="ollama")
+    benchmark_result = BenchmarkResult(
+        status="PASS",
+        framework="ollama",
+        model=model_name,
+        mode="inference",
+        use_case="text_generation",
+        precision=getattr(params, "precision", "auto"),
+        batch_size=1,
+        system_info=system_info,
+        metrics=metrics,
+        latency_stats={
+            "mean": avg_time * 1000,
+            "num_runs": params.num_runs,
+        },
+    )
+    emit_result(benchmark_result)
+
     return {
         'model': model_config['name'],
         'status': 'PASSED',

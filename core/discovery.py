@@ -97,6 +97,32 @@ def resolve_benchmark_path(
     return None
 
 
+def load_benchmark_meta(script_path: Path):
+    """Try to import BENCHMARK_META from a script. Returns dict or None."""
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location("_bm_probe", str(script_path))
+        if spec is None or spec.loader is None:
+            return None
+        # Only read the source, don't execute — look for BENCHMARK_META assignment
+        source = script_path.read_text()
+        if "BENCHMARK_META" not in source:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        # Prevent side effects by not fully loading heavy imports
+        # Instead, parse the BENCHMARK_META from source directly
+        import ast
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "BENCHMARK_META":
+                        return {"has_meta": True, "path": str(script_path)}
+        return None
+    except Exception:
+        return None
+
+
 # Module-level cache so the scan only runs once per process.
 _registry_cache: Optional[Dict[RegistryKey, Path]] = None
 

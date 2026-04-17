@@ -1,0 +1,53 @@
+name: Benchmark CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install numpy Pillow
+
+      - name: Run CPU smoke test (ResNet50 fp32)
+        run: |
+          python benchmarks/pytorch/resnet/inference/classification/main.py \
+            --model resnet50 --precision fp32 --batch_size 1 \
+            --device cpu --num_runs 3 --num_warmup 1
+
+      - name: Verify JSON output format
+        run: |
+          output=$(python benchmarks/pytorch/resnet/inference/classification/main.py \
+            --model resnet50 --precision fp32 --batch_size 1 \
+            --device cpu --num_runs 2 --num_warmup 1 2>&1)
+          echo "$output" | grep -q "BENCHMARK_JSON_START" || (echo "Missing JSON output" && exit 1)
+          echo "$output" | grep -q '"status": "PASS"' || (echo "Benchmark did not PASS" && exit 1)
+          echo "JSON output format verified"
+
+      - name: Verify benchmark discovery
+        run: python benchmark.py --list-benchmarks
+
+      - name: Save results
+        if: github.ref == 'refs/heads/main'
+        run: |
+          python benchmark.py --framework pytorch --model resnet50 \
+            --precision fp32 --batch_size 1 --mode inference \
+            --usecase classification --device cpu --timeout 5
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: benchmark_results/
+          retention-days: 30

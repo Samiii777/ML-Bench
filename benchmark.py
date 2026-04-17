@@ -1441,6 +1441,12 @@ def main():
                        help="ONNX execution provider (default: auto-detect best)")
     parser.add_argument("--check-memory", action="store_true",
                        help="Check memory requirements for planned benchmarks without running them")
+    parser.add_argument("--list-benchmarks", action="store_true",
+                       help="List all discovered benchmark scripts and exit")
+    parser.add_argument("--compare", nargs=2, metavar=("FILE1", "FILE2"),
+                       help="Compare two result files (JSON or CSV) and exit")
+    parser.add_argument("--dashboard", action="store_true",
+                       help="Launch Streamlit results dashboard")
     parser.add_argument("--training_mode", type=str, default="scratch",
                        choices=["scratch", "finetune"],
                        help="Training mode: scratch (random weights) or finetune (pre-trained weights)")
@@ -1491,6 +1497,39 @@ def main():
         set_skip_vram_check(True)
         print("VRAM checking disabled - all benchmarks will run regardless of memory constraints")
     
+    # Launch dashboard if requested
+    if getattr(args, 'dashboard', False):
+        import subprocess as _sp
+        print("Launching ML-Bench Dashboard...")
+        _sp.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
+        return
+
+    # Compare results if requested
+    if getattr(args, 'compare', None):
+        from compare import load_result_file, compare_results
+        df1 = load_result_file(args.compare[0])
+        df2 = load_result_file(args.compare[1])
+        if df1 is not None and df2 is not None:
+            compare_results(df1, df2, args.compare[0], args.compare[1])
+        else:
+            print("Error: Could not load one or both result files")
+            sys.exit(1)
+        return
+
+    # List discovered benchmarks if requested
+    if getattr(args, 'list_benchmarks', False):
+        from core.discovery import discover_benchmarks, load_benchmark_meta
+        registry = discover_benchmarks(Path.cwd())
+        print(f"\nDiscovered {len(registry)} benchmark scripts:\n")
+        print(f"{'Path':<75} {'Migrated'}")
+        print("-" * 85)
+        for key, path in sorted(registry.items()):
+            rel = path.relative_to(Path.cwd())
+            meta = load_benchmark_meta(path)
+            migrated = "yes" if meta else "no"
+            print(f"{str(rel):<75} {migrated}")
+        return
+
     # Check memory requirements if requested
     if getattr(args, 'check_memory', False):
         runner.check_memory_requirements(args)

@@ -1,29 +1,9 @@
 #!/usr/bin/env python3
-"""
-YOLOv5 Detection Inference Benchmark for ONNX
-Real YOLOv5 implementation using Ultralytics
-"""
+"""ONNX YOLOv5 Detection Inference Benchmark"""
 
-import onnxruntime as ort
-import numpy as np
-import time
-import argparse
 import sys
-import os
 from pathlib import Path
-import subprocess
-import tempfile
-import torch
 
-def _synchronize_gpu():
-    """Synchronize GPU for accurate timing with ONNX GPU providers"""
-    try:
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-    except Exception:
-        pass
-
-# Add project root to path for utils import
 project_root = Path(__file__).resolve()
 for parent in project_root.parents:
     if (parent / "benchmark.py").exists():
@@ -31,433 +11,189 @@ for parent in project_root.parents:
             sys.path.insert(0, str(parent))
         break
 
-def get_gpu_memory_usage():
-    """Get GPU memory usage using cross-platform method"""
-    try:
-        from utils.shared_device_utils import get_gpu_memory_efficient
-        memory_info = get_gpu_memory_efficient()
-        return memory_info.get('total_gpu_used_gb', 0.0)
-    except Exception as e:
-        print(f"Warning: Could not get GPU memory usage: {e}")
-        return 0.0
+import os
+import ssl
+import tempfile
+import urllib.request
+import numpy as np
+import torch
 
-def create_synthetic_image(batch_size=1, height=640, width=640):
-    """Create synthetic image data for benchmarking"""
-    # Create random RGB image data in NCHW format (0-255 range like YOLOv5 expects)
-    images = np.random.randint(0, 256, (batch_size, 3, height, width), dtype=np.uint8)
-    # Convert to float32 and normalize to 0-1 range as expected by YOLOv5
-    images = images.astype(np.float32) / 255.0
-    return images
+from core.harness import OnnxHarness
+from core.schema import BenchmarkMeta
+from core.args import build_base_parser, add_onnx_args
 
-def convert_yolo_pytorch_to_onnx(model_name, onnx_path, precision="fp32"):
-    """Download pre-trained YOLOv5 ONNX model directly from official releases"""
-    print(f"Downloading {model_name} ONNX model (precision: {precision})...")
-    
-    try:
-        import urllib.request
-        import ssl
-        
-        # Map model names to official ONNX download URLs
-        model_urls = {
-            "yolov5s": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5s.onnx",
-            "yolov5m": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5m.onnx", 
-            "yolov5l": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5l.onnx",
-            "yolov5x": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5x.onnx",
-            "yolov5": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5s.onnx"  # Default to small
-        }
-        
-        model_url = model_urls.get(model_name, model_urls["yolov5s"])
-        print(f"Downloading from: {model_url}")
-        
-        # Create directory for ONNX file if it doesn't exist
-        os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
-        
-        # Download with SSL context (some systems require this)
-        ssl_context = ssl.create_default_context()
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        
-        with urllib.request.urlopen(model_url, context=ssl_context) as response:
-            with open(onnx_path, 'wb') as f:
-                f.write(response.read())
-        
-        print(f"✓ Real YOLOv5 ONNX model downloaded to {onnx_path}")
-        
-        # Note: The official ONNX models are FP32, so for FP16 we'll use FP32 model with FP16 inference
-        if precision == "fp16":
-            print("Note: Using FP32 model with FP16 inference (official YOLOv5 ONNX models are FP32)")
-        
-        return True, "Real YOLOv5 (Downloaded)"
-        
-    except Exception as e:
-        print(f"Error downloading {model_name}: {str(e)}")
-        print("Falling back to synthetic model...")
-        return False, "Synthetic"
+BENCHMARK_META = BenchmarkMeta(
+    framework="onnx",
+    model_family="yolo",
+    supported_models=["yolov5s", "yolov5m", "yolov5l", "yolov5x", "yolov5"],
+    supported_precisions=["fp32", "fp16", "mixed"],
+    mode="inference",
+    use_case="detection",
+)
 
-def convert_yolo_pytorch_to_onnx_torch_hub(model_name, onnx_path, precision="fp32"):
-    """Fallback method using torch.hub for YOLOv5 conversion (likely to fail without ultralytics)"""
-    try:
-        print(f"Trying torch.hub as fallback for {model_name}...")
-        
-        # This will likely fail since torch.hub YOLOv5 now requires ultralytics
-        model = torch.hub.load('ultralytics/yolov5', model_name, pretrained=True, trust_repo=True)
-        model.eval()
-        
-        print(f"✓ Successfully loaded {model_name} via torch.hub")
-        
-        # Handle precision conversion
-        if precision == "fp16":
-            model = model.half()
-            dummy_input = torch.randn(1, 3, 640, 640, dtype=torch.float16)
-            print("Converting model to FP16 precision")
-        else:
-            dummy_input = torch.randn(1, 3, 640, 640)
-        
-        # Create directory for ONNX file if it doesn't exist
-        os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
-        
-        # Export to ONNX with dynamic batch size support
-        print("Exporting to ONNX...")
-        torch.onnx.export(
-            model,
-            dummy_input,
-            onnx_path,
-            export_params=True,
-            opset_version=11,
-            do_constant_folding=True,
-            input_names=['images'],  # YOLOv5 uses 'images' as input name
-            output_names=['output'],
-            dynamic_axes={
-                'images': {0: 'batch_size'},    # Variable batch dimension
-                'output': {0: 'batch_size'}     # Variable output batch dimension
-            }
-        )
-        
-        print(f"✓ Model converted and saved to {onnx_path} with dynamic batch size support")
-        return True, "Real YOLOv5 (torch.hub)"
-        
-    except Exception as e:
-        print(f"torch.hub fallback failed: {str(e)}")
-        return False, "Synthetic"
+MODEL_URLS = {
+    "yolov5s": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5s.onnx",
+    "yolov5m": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5m.onnx",
+    "yolov5l": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5l.onnx",
+    "yolov5x": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5x.onnx",
+    "yolov5": "https://github.com/ultralytics/yolov5/releases/download/v7.0/yolov5s.onnx",
+}
 
-def create_synthetic_onnx_model():
-    """Create a synthetic ONNX model for benchmarking (fallback)"""
-    print("Creating synthetic ONNX model as fallback...")
+
+def _create_synthetic_onnx():
+    """Create a synthetic ONNX model as a fallback."""
     import torch.nn as nn
-    
-    # Create a simple CNN model as placeholder
-    class SimpleDetectionModel(nn.Module):
+
+    class SimpleCNN(nn.Module):
         def __init__(self):
             super().__init__()
             self.conv1 = nn.Conv2d(3, 32, 3, padding=1)
             self.conv2 = nn.Conv2d(32, 64, 3, padding=1)
             self.conv3 = nn.Conv2d(64, 128, 3, padding=1)
             self.pool = nn.AdaptiveAvgPool2d(1)
-            self.fc = nn.Linear(128, 1000)  # Detection-like output
-            
+            self.fc = nn.Linear(128, 1000)
+
         def forward(self, x):
             x = torch.relu(self.conv1(x))
             x = torch.relu(self.conv2(x))
             x = torch.relu(self.conv3(x))
             x = self.pool(x)
             x = x.view(x.size(0), -1)
-            x = self.fc(x)
-            return x
-    
-    # Export model to ONNX with dynamic batch size
-    model = SimpleDetectionModel()
+            return self.fc(x)
+
+    model = SimpleCNN()
     dummy_input = torch.randn(1, 3, 640, 640)
-    
-    with tempfile.NamedTemporaryFile(suffix='.onnx', delete=False) as f:
-        torch.onnx.export(
-            model, 
-            dummy_input, 
-            f.name, 
-            input_names=['images'], 
-            output_names=['output'],
-            dynamic_axes={
-                'images': {0: 'batch_size'},    # Variable batch size
-                'output': {0: 'batch_size'}     # Variable batch size for output too
-            }
-        )
-        return f.name, "Synthetic"
 
-def get_yolo_onnx_model_path(model_name, precision):
-    """Get the path where the ONNX model should be stored"""
-    # Create models directory in project root
-    models_dir = Path(__file__).resolve().parent.parent.parent.parent.parent / "models"
-    models_dir.mkdir(exist_ok=True)
-    
-    # Create ONNX subdirectory
-    onnx_dir = models_dir / "onnx"
-    onnx_dir.mkdir(exist_ok=True)
-    
-    # Model filename includes precision for proper caching
-    model_filename = f"{model_name}_{precision}.onnx"
-    return onnx_dir / model_filename
-
-def benchmark_yolo_onnx_inference(model_name, precision, batch_size, execution_provider, num_warmup=10, num_runs=100):
-    """Benchmark YOLOv5 ONNX inference performance"""
-    
-    print(f"Starting {model_name} ONNX detection benchmark")
-    print(f"Precision: {precision}")
-    print(f"Batch size: {batch_size}")
-    print(f"Execution Provider: {execution_provider}")
-    print(f"Warmup runs: {num_warmup}")
-    print(f"Benchmark runs: {num_runs}")
-    
-    try:
-        # Get ONNX model path
-        onnx_model_path = get_yolo_onnx_model_path(model_name, precision)
-        
-        # Download or use existing ONNX model
-        model_type = "Unknown"
-        if not onnx_model_path.exists():
-            print(f"ONNX model not found at {onnx_model_path}")
-            # Try direct download first
-            success, model_type = convert_yolo_pytorch_to_onnx(model_name, str(onnx_model_path), precision)
-            if not success:
-                # Try torch.hub as fallback (likely to fail without ultralytics)
-                print("Direct download failed, trying torch.hub fallback...")
-                success, model_type = convert_yolo_pytorch_to_onnx_torch_hub(model_name, str(onnx_model_path), precision)
-                if not success:
-                    model_path, model_type = create_synthetic_onnx_model()
-                    print(f"Using synthetic model as fallback")
-                else:
-                    model_path = str(onnx_model_path)
-            else:
-                model_path = str(onnx_model_path)
-        else:
-            model_path = str(onnx_model_path)
-            model_type = "Real YOLOv5 (cached)"
-            print(f"Using existing ONNX model: {model_path}")
-        
-        print(f"Model type: {model_type}")
-        
-        print(f"Creating ONNX Runtime session with {execution_provider}...")
-        
-        # Configure session options
-        sess_options = ort.SessionOptions()
-        sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        
-        # Set execution provider with options
-        providers = []
-        if execution_provider == 'CUDAExecutionProvider':
-            providers = [('CUDAExecutionProvider', {
-                'device_id': 0,
-                'arena_extend_strategy': 'kNextPowerOfTwo',
-                'gpu_mem_limit': 2 * 1024 * 1024 * 1024,  # 2GB
-                'cudnn_conv_algo_search': 'EXHAUSTIVE',
-                'do_copy_in_default_stream': True,
-            })]
-        elif execution_provider == 'TensorrtExecutionProvider':
-            providers = [('TensorrtExecutionProvider', {
-                'device_id': 0,
-                'trt_max_workspace_size': 2147483648,  # 2GB
-                'trt_fp16_enable': precision == 'fp16',
-            })]
-        elif execution_provider == 'ROCMExecutionProvider':
-            providers = [('ROCMExecutionProvider', {
-                'device_id': 0,
-                'arena_extend_strategy': 'kNextPowerOfTwo',
-                'gpu_mem_limit': 2 * 1024 * 1024 * 1024,  # 2GB
-                'do_copy_in_default_stream': True,
-            })]
-        elif execution_provider == 'MIGraphXExecutionProvider':
-            providers = [('MIGraphXExecutionProvider', {
-                'device_id': 0,
-                'fp16_enable': precision == 'fp16',
-            })]
-        else:
-            providers = [execution_provider]
-        
-        session = ort.InferenceSession(model_path, sess_options=sess_options, providers=providers)
-        
-        # Get input/output info
-        input_name = session.get_inputs()[0].name
-        input_shape = session.get_inputs()[0].shape
-        output_names = [output.name for output in session.get_outputs()]
-        
-        print(f"Model input: {input_name} {input_shape}")
-        print(f"Model outputs: {output_names}")
-        
-        # Prepare synthetic data
-        if len(input_shape) == 4:  # NCHW format
-            # Handle dynamic batch size (when dimension is a string like 'batch_size' or -1)
-            if input_shape[0] == 1 or input_shape[0] == -1 or isinstance(input_shape[0], str):
-                input_data = create_synthetic_image(batch_size, input_shape[2], input_shape[3])
-            else:
-                input_data = create_synthetic_image(input_shape[0], input_shape[2], input_shape[3])
-        else:
-            raise ValueError(f"Unexpected input shape: {input_shape}")
-        
-        # Convert precision based on model's expected input type
-        model_input_type = session.get_inputs()[0].type
-        if model_input_type == 'tensor(float16)' or (precision == "fp16" and 'Real YOLOv5' in model_type):
-            input_data = input_data.astype(np.float16)
-        elif model_input_type == 'tensor(float)':
-            input_data = input_data.astype(np.float32)
-        else:
-            # Default to float32
-            input_data = input_data.astype(np.float32)
-        
-        print(f"Input data shape: {input_data.shape}")
-        print(f"Input data dtype: {input_data.dtype}")
-        
-        # Track initial memory
-        initial_memory = get_gpu_memory_usage()
-        print(f"Initial GPU memory: {initial_memory:.2f} GB")
-        
-        # Check if we're using a GPU provider
-        actual_providers = session.get_providers()
-        is_gpu_provider = any(p in str(actual_providers) for p in ['CUDA', 'Tensorrt', 'ROCm', 'MIGraphX'])
-        
-        # Warmup
-        print(f"\nRunning {num_warmup} warmup iterations...")
-        for i in range(num_warmup):
-            _ = session.run(output_names, {input_name: input_data})
-        if is_gpu_provider:
-            _synchronize_gpu()
-        
-        # Benchmark
-        print(f"\nRunning {num_runs} benchmark iterations...")
-        latencies = []
-        
-        for i in range(num_runs):
-            if is_gpu_provider:
-                _synchronize_gpu()
-            start_time = time.perf_counter()
-            results = session.run(output_names, {input_name: input_data})
-            if is_gpu_provider:
-                _synchronize_gpu()
-            end_time = time.perf_counter()
-            
-            latency = end_time - start_time
-            latencies.append(latency)
-            
-            if (i + 1) % 20 == 0:
-                print(f"Completed {i + 1}/{num_runs} iterations")
-        
-        # Calculate metrics
-        avg_latency = np.mean(latencies)
-        std_latency = np.std(latencies)
-        min_latency = np.min(latencies)
-        max_latency = np.max(latencies)
-        
-        # Throughput calculation
-        effective_batch_size = input_data.shape[0]
-        throughput = effective_batch_size / avg_latency
-        
-        # Memory usage
-        final_memory = get_gpu_memory_usage()
-        memory_used_gb = final_memory - initial_memory if final_memory > initial_memory else final_memory
-        
-        print(f"\n=== {model_name.upper()} ONNX DETECTION BENCHMARK RESULTS ===")
-        print(f"Framework: ONNX Runtime")
-        print(f"Model Type: {model_type}")
-        print(f"Execution Provider: {execution_provider}")
-        print(f"Precision: {precision}")
-        print(f"Batch Size: {effective_batch_size}")
-        print(f"Input Shape: {input_data.shape}")
-        print(f"Total GPU Memory Used: {memory_used_gb:.2f} GB")
-        print()
-        print("Performance Metrics:")
-        print(f"Average Latency: {avg_latency*1000:.2f} ms")
-        print(f"Std Latency: {std_latency*1000:.2f} ms")
-        print(f"Min Latency: {min_latency*1000:.2f} ms")
-        print(f"Max Latency: {max_latency*1000:.2f} ms")
-        print(f"Throughput: {throughput:.2f} samples/sec")
-        print(f"Throughput (images/sec): {throughput:.2f}")
-        print("=" * 60)
-        
-        # Print final result in expected format
-        print(f"\nFINAL RESULT: {throughput:.2f} samples/sec")
-        
-        # Clean up temporary file only if using synthetic model
-        if model_type == "Synthetic":
-            try:
-                os.unlink(model_path)
-            except:
-                pass
-        
-        return {
-            'throughput_fps': throughput,
-            'avg_latency_ms': avg_latency * 1000,
-            'std_latency_ms': std_latency * 1000,
-            'min_latency_ms': min_latency * 1000,
-            'max_latency_ms': max_latency * 1000,
-            'memory_used_gb': memory_used_gb,
-            'execution_provider': execution_provider,
-            'model_type': model_type
-        }
-        
-    except Exception as e:
-        print(f"Error during benchmark: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return None
-
-def main():
-    parser = argparse.ArgumentParser(description='ONNX YOLOv5 Detection Benchmark')
-    parser.add_argument('--model', type=str, default='yolov5s',
-                       choices=['yolov5s', 'yolov5m', 'yolov5l', 'yolov5x', 'yolov5'],
-                       help='YOLOv5 model variant')
-    parser.add_argument('--precision', type=str, default='fp32',
-                       choices=['fp32', 'fp16', 'mixed'],
-                       help='Inference precision')
-    parser.add_argument('--batch_size', type=int, default=1,
-                       help='Batch size for inference')
-    parser.add_argument('--execution_provider', type=str, default='auto',
-                       choices=['CUDAExecutionProvider', 'TensorrtExecutionProvider', 'CPUExecutionProvider', 
-                               'ROCMExecutionProvider', 'MIGraphXExecutionProvider', 'auto'],
-                       help='ONNX Runtime execution provider (auto = select best available)')
-    parser.add_argument('--num_warmup', type=int, default=10,
-                       help='Number of warmup iterations')
-    parser.add_argument('--num_runs', type=int, default=100,
-                       help='Number of benchmark iterations')
-    parser.add_argument('--force_convert', action='store_true',
-                       help='Force reconversion of PyTorch model to ONNX')
-    
-    args = parser.parse_args()
-    
-    print(f"ONNX Runtime version: {ort.__version__}")
-    print(f"Available providers: {ort.get_available_providers()}")
-    print(f"PyTorch version: {torch.__version__}")
-    print()
-    
-    # Auto-select execution provider if requested
-    available_providers = ort.get_available_providers()
-    if args.execution_provider == 'auto':
-        # Priority order: TensorRT > CUDA > ROCm > MIGraphX > CPU
-        provider_priority = ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 
-                           'ROCMExecutionProvider', 'MIGraphXExecutionProvider', 'CPUExecutionProvider']
-        for provider in provider_priority:
-            if provider in available_providers:
-                args.execution_provider = provider
-                print(f"Auto-selected execution provider: {provider}")
-                break
-    else:
-        # Validate specific execution provider
-        if args.execution_provider not in available_providers:
-            print(f"Error: {args.execution_provider} not available")
-            print(f"Available providers: {available_providers}")
-            sys.exit(1)
-    
-    # Force reconversion if requested
-    if args.force_convert:
-        onnx_model_path = get_yolo_onnx_model_path(args.model, args.precision)
-        if onnx_model_path.exists():
-            onnx_model_path.unlink()
-            print(f"Removed existing ONNX model for forced reconversion")
-    
-    # Run benchmark
-    results = benchmark_yolo_onnx_inference(
-        args.model, args.precision, args.batch_size, args.execution_provider,
-        args.num_warmup, args.num_runs
+    f = tempfile.NamedTemporaryFile(suffix=".onnx", delete=False)
+    torch.onnx.export(
+        model, dummy_input, f.name,
+        input_names=["images"], output_names=["output"],
+        dynamic_axes={"images": {0: "batch_size"}, "output": {0: "batch_size"}},
     )
-    
-    if results is None:
-        sys.exit(1)
+    return f.name
+
+
+class OnnxYoloBenchmark(OnnxHarness):
+
+    @property
+    def use_case(self):
+        return "detection"
+
+    def get_onnx_model_path(self):
+        name = (self.args.model or "yolov5s").lower()
+        precision = getattr(self.args, "precision", "fp32")
+        models_dir = Path(__file__).resolve().parent.parent.parent.parent.parent / "models" / "onnx"
+        models_dir.mkdir(parents=True, exist_ok=True)
+        return str(models_dir / f"{name}_{precision}.onnx")
+
+    def export_to_onnx(self):
+        """Download pre-trained YOLOv5 ONNX model or create synthetic fallback."""
+        name = (self.args.model or "yolov5s").lower()
+        onnx_path = self.get_onnx_model_path()
+
+        model_url = MODEL_URLS.get(name, MODEL_URLS["yolov5s"])
+        print(f"Downloading {name} ONNX model from {model_url}...")
+
+        try:
+            ssl_context = ssl.create_default_context()
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE
+
+            os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
+            with urllib.request.urlopen(model_url, context=ssl_context) as response:
+                with open(onnx_path, "wb") as f:
+                    f.write(response.read())
+            print(f"Downloaded to {onnx_path}")
+            return onnx_path
+
+        except Exception as e:
+            print(f"Download failed ({e}), creating synthetic model...")
+            synthetic_path = _create_synthetic_onnx()
+            # Copy synthetic to expected path
+            import shutil
+            shutil.move(synthetic_path, onnx_path)
+            return onnx_path
+
+    def prepare_numpy_inputs(self):
+        precision = getattr(self.args, "precision", "fp32")
+        batch_size = getattr(self.args, "batch_size", 1)
+
+        # Load the session to check input name/shape
+        import onnxruntime as ort
+        onnx_path = self.get_onnx_model_path()
+        if not Path(onnx_path).exists():
+            onnx_path = self.export_to_onnx()
+
+        # Get input info from the session we'll be using
+        # Default YOLOv5 input shape: (batch, 3, 640, 640)
+        images = np.random.randint(0, 256, (batch_size, 3, 640, 640), dtype=np.uint8)
+        images = images.astype(np.float32) / 255.0
+
+        if precision == "fp16":
+            images = images.astype(np.float16)
+
+        return {"images": images}
+
+    def load_model(self):
+        """Override to handle input name detection."""
+        import onnxruntime as ort
+
+        path = self.get_onnx_model_path()
+        if not Path(path).exists():
+            path = self.export_to_onnx()
+
+        provider = getattr(self.args, "execution_provider", None)
+        available = ort.get_available_providers()
+        if provider and provider in available:
+            providers = [provider]
+        else:
+            providers = available
+
+        print(f"ONNX providers: {providers}")
+        session = ort.InferenceSession(path, providers=providers)
+
+        # Store input name for prepare_inputs
+        self._input_name = session.get_inputs()[0].name
+        return session
+
+    def prepare_inputs(self):
+        precision = getattr(self.args, "precision", "fp32")
+        batch_size = getattr(self.args, "batch_size", 1)
+
+        images = np.random.randint(0, 256, (batch_size, 3, 640, 640), dtype=np.uint8)
+        images = images.astype(np.float32) / 255.0
+
+        if precision == "fp16":
+            images = images.astype(np.float16)
+
+        input_name = getattr(self, "_input_name", "images")
+        return {input_name: images}
+
 
 if __name__ == "__main__":
-    main() 
+    parser = build_base_parser("ONNX YOLOv5 Detection Inference Benchmark")
+    add_onnx_args(parser)
+    parser.set_defaults(model="yolov5s")
+    args = parser.parse_args()
+
+    # Handle 'auto' execution provider
+    if getattr(args, "execution_provider", None) == "auto":
+        import onnxruntime as ort
+        available = ort.get_available_providers()
+        priority = ["TensorrtExecutionProvider", "CUDAExecutionProvider",
+                     "ROCMExecutionProvider", "MIGraphXExecutionProvider",
+                     "CPUExecutionProvider"]
+        for p in priority:
+            if p in available:
+                args.execution_provider = p
+                break
+
+    try:
+        benchmark = OnnxYoloBenchmark(args)
+        benchmark.run()
+        print("Benchmark completed successfully!")
+    except Exception as e:
+        print(f"Benchmark failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)

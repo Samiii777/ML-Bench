@@ -19,6 +19,10 @@ def build_base_parser(description: str = "ML-Bench Benchmark") -> argparse.Argum
                         help="Number of warmup iterations (default: 5)")
     parser.add_argument("--num_runs", type=int, default=20,
                         help="Number of benchmark iterations (default: 20)")
+    parser.add_argument("--power", action="store_true",
+                        help="Enable GPU power monitoring during benchmark")
+    parser.add_argument("--num_gpus", type=int, default=1,
+                        help="Number of GPUs to use (default: 1)")
     return parser
 
 
