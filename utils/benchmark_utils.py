@@ -1,250 +1,148 @@
-"""
-Shared benchmarking utilities for accurate timing, memory measurement, and statistics.
-
-Usage:
-    from utils.benchmark_utils import BenchmarkTimer, measure_peak_memory, compute_stats
-
-    timer = BenchmarkTimer(device)
-    timer.sync()
-    timer.start()
-    # ... run inference ...
-    elapsed_ms = timer.stop()
-
-    stats = compute_stats(latencies_ms)
-    # stats = {'mean': ..., 'std': ..., 'min': ..., 'max': ..., 'median': ..., 'p90': ..., 'p95': ..., 'p99': ...}
-"""
+"""Shared timing, memory and statistics helpers used by every benchmark."""
 
 import gc
 import time
 from contextlib import contextmanager
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 import torch
 
 
+def synchronize(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps":
+        torch.mps.synchronize()
+
+
 class BenchmarkTimer:
-    """GPU-aware timer using CUDA Events when available, with wall-clock fallback.
-    
-    CUDA events measure elapsed time on the GPU stream directly, avoiding
-    host-side jitter from OS scheduling, Python GIL, etc.
+    """Times one region. On CUDA/ROCm uses device events (no host jitter);
+    elsewhere uses perf_counter around device syncs.
+
+    ``stop()`` always synchronizes, so back-to-back start/stop pairs measure
+    each iteration in isolation (latency, not pipelined throughput).
     """
 
     def __init__(self, device: torch.device):
         self.device = device
-        self.use_cuda_events = device.type == "cuda"
-        
-        if self.use_cuda_events:
-            self._start_event = torch.cuda.Event(enable_timing=True)
-            self._end_event = torch.cuda.Event(enable_timing=True)
-        else:
-            self._start_time: float = 0.0
-            self._end_time: float = 0.0
+        self.use_events = device.type == "cuda"
+        if self.use_events:
+            self._start = torch.cuda.Event(enable_timing=True)
+            self._end = torch.cuda.Event(enable_timing=True)
 
-    def sync(self):
-        """Synchronize the device (call before and after timed regions)."""
-        if self.device.type == "cuda":
-            torch.cuda.synchronize(self.device)
-        elif self.device.type == "mps" and hasattr(torch.mps, "synchronize"):
-            torch.mps.synchronize()
-
-    def start(self):
-        """Record the start of a timed region."""
-        if self.use_cuda_events:
-            self._start_event.record()
+    def start(self) -> None:
+        if self.use_events:
+            self._start.record()
         else:
-            self.sync()
-            self._start_time = time.perf_counter()
+            synchronize(self.device)
+            self._t0 = time.perf_counter()
 
     def stop(self) -> float:
-        """Record the end of a timed region and return elapsed time in milliseconds."""
-        if self.use_cuda_events:
-            self._end_event.record()
-            torch.cuda.synchronize(self.device)
-            return self._start_event.elapsed_time(self._end_event)
-        else:
-            self.sync()
-            self._end_time = time.perf_counter()
-            return (self._end_time - self._start_time) * 1000.0
+        """Return elapsed milliseconds since ``start()``."""
+        if self.use_events:
+            self._end.record()
+            self._end.synchronize()
+            return self._start.elapsed_time(self._end)
+        synchronize(self.device)
+        return (time.perf_counter() - self._t0) * 1000.0
 
 
 @contextmanager
 def gc_disabled():
-    """Context manager that disables garbage collection for the duration."""
-    gc_was_enabled = gc.isenabled()
+    was_enabled = gc.isenabled()
     gc.disable()
     try:
         yield
     finally:
-        if gc_was_enabled:
+        if was_enabled:
             gc.enable()
 
 
-def measure_peak_memory(device: torch.device) -> Dict[str, float]:
-    """Measure peak GPU memory using PyTorch allocator stats.
-    
-    Call torch.cuda.reset_peak_memory_stats() before the timed region,
-    then call this after to get clean benchmark-only peak.
-    
-    Returns dict with keys: peak_allocated_gb, peak_reserved_gb, current_allocated_gb
-    """
-    if device.type != "cuda":
-        return {}
-    
-    return {
-        "peak_allocated_gb": torch.cuda.max_memory_allocated(device) / (1024 ** 3),
-        "peak_reserved_gb": torch.cuda.max_memory_reserved(device) / (1024 ** 3),
-        "current_allocated_gb": torch.cuda.memory_allocated(device) / (1024 ** 3),
-    }
-
-
-def reset_memory_tracking(device: torch.device):
-    """Reset peak memory stats so subsequent measurement is clean."""
+def reset_memory_tracking(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
         torch.cuda.reset_peak_memory_stats(device)
 
 
-def compute_stats(values_ms: List[float]) -> Dict[str, float]:
-    """Compute comprehensive statistics from a list of latency measurements (in ms).
-    
-    Returns dict with: mean, std (sample), min, max, median, p90, p95, p99
-    """
-    arr = np.array(values_ms, dtype=np.float64)
-    n = len(arr)
-    
+def measure_peak_memory(device: torch.device) -> Dict[str, float]:
+    """Peak PyTorch-allocator memory since the last ``reset_memory_tracking``."""
+    if device.type != "cuda":
+        return {}
     return {
-        "mean": float(np.mean(arr)),
-        "std": float(np.std(arr, ddof=1)) if n > 1 else 0.0,
-        "min": float(np.min(arr)),
-        "max": float(np.max(arr)),
+        "peak_allocated_gb": torch.cuda.max_memory_allocated(device) / 1024**3,
+        "peak_reserved_gb": torch.cuda.max_memory_reserved(device) / 1024**3,
+    }
+
+
+def compute_stats(values_ms: List[float]) -> Dict[str, float]:
+    """mean, std (sample), min, max, median, p90/p95/p99, cv_pct, n."""
+    arr = np.asarray(values_ms, dtype=np.float64)
+    n = len(arr)
+    if n == 0:
+        return {"n": 0}
+    mean = float(arr.mean())
+    std = float(arr.std(ddof=1)) if n > 1 else 0.0
+    return {
+        "mean": mean,
+        "std": std,
+        "min": float(arr.min()),
+        "max": float(arr.max()),
         "median": float(np.median(arr)),
         "p90": float(np.percentile(arr, 90)),
         "p95": float(np.percentile(arr, 95)),
         "p99": float(np.percentile(arr, 99)),
+        "cv_pct": (std / mean * 100.0) if mean > 0 else 0.0,
         "n": n,
     }
 
 
-def warmup(fn, num_warmup: int, device: torch.device, desc: str = "Warming up"):
-    """Run warmup iterations with proper synchronization.
-    
-    Args:
-        fn: callable that runs one iteration (no return value needed)
-        num_warmup: number of warmup iterations
-        device: torch device for synchronization
-    """
-    print(f"{desc} ({num_warmup} iterations)...")
+def warmup(fn, num_warmup: int, device: torch.device, desc: str = "Warming up") -> None:
+    if num_warmup > 0:
+        print(f"{desc} ({num_warmup} iterations)...")
     for _ in range(num_warmup):
         fn()
-    
-    if device.type == "cuda":
-        torch.cuda.synchronize(device)
-    elif device.type == "mps" and hasattr(torch.mps, "synchronize"):
-        torch.mps.synchronize()
+    synchronize(device)
 
 
-def benchmark_loop(
-    fn,
-    num_runs: int,
-    device: torch.device,
-    desc: str = "Benchmarking",
-    report_interval: int = 20,
-) -> List[float]:
-    """Run a benchmark loop with proper timing and return per-iteration latencies (ms).
-    
-    Args:
-        fn: callable that runs one iteration
-        num_runs: number of timed iterations
-        device: torch device for timer
-        desc: description for progress reporting
-        report_interval: how often to print progress
-    
-    Returns:
-        List of latencies in milliseconds
-    """
+def benchmark_loop(fn, num_runs: int, device: torch.device, desc: str = "Benchmarking",
+                   report_interval: int = 20) -> List[float]:
+    """Run ``fn`` ``num_runs`` times; return per-iteration latencies in ms."""
     timer = BenchmarkTimer(device)
     latencies: List[float] = []
-    
     print(f"{desc} ({num_runs} iterations)...")
-    
     with gc_disabled():
         for i in range(num_runs):
             timer.start()
             fn()
-            elapsed_ms = timer.stop()
-            latencies.append(elapsed_ms)
-            
+            latencies.append(timer.stop())
             if report_interval and (i + 1) % report_interval == 0:
                 print(f"  Completed {i + 1}/{num_runs}")
-    
     return latencies
 
 
-def setup_torch_backends(compile_model: bool = False, cudnn_benchmark: bool = True):
-    """Configure PyTorch backends for optimal benchmark performance.
-    
-    Args:
-        compile_model: If True, callers should wrap their model with torch.compile()
-        cudnn_benchmark: Enable cuDNN autotuning for fixed-size inputs (default True)
+def calibrated_reps(fn, device: torch.device, target_ms: float = 5.0, max_reps: int = 1000) -> int:
+    """How many back-to-back calls of ``fn`` fill ~target_ms of device time.
+
+    Timing a single 10 µs kernel with a sync per sample measures launch + sync
+    overhead, not the kernel. Timing ``reps`` queued calls per sample amortises it.
     """
-    if cudnn_benchmark and torch.cuda.is_available():
-        # Maps to MIOpen autotune on ROCm, cuDNN autotune on NVIDIA — safe on both.
-        torch.backends.cudnn.benchmark = True
-    
-    # TF32 is NVIDIA Ampere+ only. On ROCm/AMD the flag is either absent or a
-    # silent no-op; gate it to NVIDIA to avoid misleading the user about what's
-    # actually active.
-    is_nvidia = (
-        torch.cuda.is_available()
-        and getattr(torch.version, "hip", None) is None
-    )
-    if is_nvidia:
-        try:
-            torch.backends.cuda.matmul.allow_tf32 = True
-            torch.backends.cudnn.allow_tf32 = True
-        except AttributeError:
-            pass
+    timer = BenchmarkTimer(device)
+    timer.start()
+    fn()
+    one_ms = max(timer.stop(), 1e-3)
+    return int(min(max_reps, max(1, target_ms // one_ms)))
 
 
-def maybe_compile(model: torch.nn.Module, compile_enabled: bool = False):
-    """Optionally wrap a model with torch.compile().
-    
-    Returns the (possibly compiled) model. Safe to call even when compile
-    is not supported — falls back gracefully.
+def setup_torch_backends(precision: str = "fp32", cudnn_benchmark: bool = True) -> None:
+    """Make the math mode match the precision label.
+
+    "fp32" means IEEE fp32: TF32 is disabled for both matmul and cuDNN conv
+    (PyTorch enables cuDNN TF32 by default, which would silently make "fp32"
+    conv numbers TF32 numbers on Ampere+). "tf32" opts in explicitly.
     """
-    if not compile_enabled:
-        return model
-    
-    try:
-        compiled = torch.compile(model)
-        print("Model compiled with torch.compile()")
-        return compiled
-    except Exception as e:
-        print(f"torch.compile() not available or failed: {e}, using eager mode")
-        return model
-
-
-def print_benchmark_stats(
-    stats: Dict[str, float],
-    batch_size: int = 1,
-    prefix: str = "",
-):
-    """Print benchmark statistics in a standard format parseable by the framework."""
-    mean_ms = stats["mean"]
-    per_sample_ms = mean_ms / batch_size
-    throughput = (batch_size / mean_ms) * 1000.0 if mean_ms > 0 else 0.0
-    
-    if prefix:
-        print(f"\n{prefix}")
-    print(f"Average Inference Time: {mean_ms:.2f} ms")
-    print(f"Per-sample Latency: {per_sample_ms:.2f} ms/sample")
-    print(f"Median Inference Time: {stats['median']:.2f} ms")
-    print(f"P90 Inference Time: {stats['p90']:.2f} ms")
-    print(f"P95 Inference Time: {stats['p95']:.2f} ms")
-    print(f"P99 Inference Time: {stats['p99']:.2f} ms")
-    print(f"Min Inference Time: {stats['min']:.2f} ms")
-    print(f"Max Inference Time: {stats['max']:.2f} ms")
-    print(f"Std Inference Time: {stats['std']:.2f} ms")
-    print(f"Throughput: {throughput:.2f} samples/sec")
-    print(f"Number of runs: {stats['n']}")
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = cudnn_benchmark
+        tf32 = precision == "tf32"
+        torch.backends.cuda.matmul.allow_tf32 = tf32
+        torch.backends.cudnn.allow_tf32 = tf32

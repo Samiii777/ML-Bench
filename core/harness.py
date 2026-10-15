@@ -1,38 +1,87 @@
-"""BenchmarkHarness — base class that eliminates duplicated device/timing/memory code."""
+"""Benchmark harnesses: one timing/memory/stats/output path shared by all scripts.
+
+Subclasses implement ``load_model``, ``prepare_inputs`` and ``run_step``; ``run()``
+does warmup, timed iterations, memory + optional power sampling, validation and
+emits a single ``BenchmarkResult``.
+
+Metric conventions (all harnesses):
+  throughput        samples/sec = batch_size / mean batch latency
+  latency_p50_ms    median latency of one batch (one ``run_step`` call)
+  latency_p99_ms    99th percentile batch latency
+  peak_memory_gb    PyTorch allocator peak during the timed loop
+"""
 
 import argparse
+import contextlib
 import sys
+import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import torch
 
-# Ensure project root is on path so utils/ is importable
 _project_root = Path(__file__).resolve().parent.parent
 if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from utils.benchmark_utils import (
-    BenchmarkTimer, benchmark_loop, compute_stats, gc_disabled,
-    measure_peak_memory, reset_memory_tracking, setup_torch_backends, warmup,
+    benchmark_loop, calibrated_reps, compute_stats, measure_peak_memory,
+    reset_memory_tracking, setup_torch_backends, synchronize, warmup,
 )
-from utils.shared_device_utils import get_gpu_memory_efficient, collect_system_fingerprint
+from utils.shared_device_utils import collect_system_fingerprint
 from core.schema import BenchmarkResult, MetricEntry, SystemInfo
-from core.output import emit_result
+from core.output import emit_result, emit_error
 from core.validation import ResultValidator
+
+DTYPES = {
+    "fp32": torch.float32,
+    "tf32": torch.float32,
+    "fp16": torch.float16,
+    "bf16": torch.bfloat16,
+    "mixed": torch.float32,  # fp32 weights, fp16 autocast
+}
+
+
+class SkipBenchmark(Exception):
+    """Raise when a config can't be measured meaningfully here (reported as SKIP, not FAIL)."""
+
+
+def resolve_device(device_str: str = "auto") -> torch.device:
+    if device_str != "auto":
+        return torch.device(device_str)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def build_system_info(device: torch.device) -> SystemInfo:
+    fp = collect_system_fingerprint()
+    si = SystemInfo(device=str(device), **{k: v for k, v in fp.items() if k in SystemInfo.__dataclass_fields__})
+    if device.type == "cuda":
+        si.device_name = torch.cuda.get_device_name(device)
+        si.gpu_memory_total_gb = torch.cuda.get_device_properties(device).total_memory / 1024**3
+        si.gpu_vendor = "amd" if getattr(torch.version, "hip", None) else "nvidia"
+    elif device.type == "mps":
+        si.device_name, si.gpu_vendor = "Apple MPS", "apple"
+    else:
+        si.device_name, si.gpu_vendor = si.cpu_model or "CPU", "none"
+    return si
 
 
 class BenchmarkHarness:
-    """Base class for all benchmark scripts.
-
-    Subclasses override ``load_model``, ``prepare_inputs``, and ``run_step``.
-    The ``run()`` method handles device setup, warmup, timing, memory
-    measurement, statistics, and structured output.
-    """
+    framework = "pytorch"
+    mode = "inference"
+    use_case = "classification"
+    primary_metric = "throughput"
+    throughput_unit = "samples/sec"
 
     def __init__(self, args: argparse.Namespace):
         self.args = args
-        self.device = self._resolve_device()
+        self.precision = getattr(args, "precision", "fp32")
+        self.batch_size = getattr(args, "batch_size", 1)
+        self.device = resolve_device(getattr(args, "device", "auto"))
         self._model = None
         self._inputs = None
 
@@ -51,119 +100,73 @@ class BenchmarkHarness:
         return []
 
     def validate_result(self, model: Any, inputs: Any, outputs: Any, validator: ResultValidator) -> None:
-        """Add validation checks. Override in subclass to verify correctness."""
-        pass
+        """Add correctness checks; any failed check marks the run FAIL."""
 
-    # ── provided by base ──────────────────────────────────────────
+    def get_config(self) -> Dict[str, Any]:
+        if isinstance(self._inputs, torch.Tensor):
+            return {"input_shape": list(self._inputs.shape)}
+        return {}
 
-    @staticmethod
-    def _resolve_device_from_str(device_str: str = "auto") -> torch.device:
-        if device_str != "auto":
-            return torch.device(device_str)
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
+    # ── precision helpers ─────────────────────────────────────────
 
-    def _resolve_device(self) -> torch.device:
-        return self._resolve_device_from_str(getattr(self.args, "device", "auto"))
+    @property
+    def dtype(self) -> torch.dtype:
+        """Dtype for weights and inputs."""
+        return DTYPES.get(self.precision, torch.float32)
 
-    def synchronize(self) -> None:
-        if self.device.type == "cuda":
-            torch.cuda.synchronize(self.device)
-        elif self.device.type == "mps" and hasattr(torch.mps, "synchronize"):
-            torch.mps.synchronize()
+    @property
+    def effective_precision(self) -> str:
+        if self.precision == "mixed":
+            return f"mixed_{'bf16' if self.device.type == 'cpu' else 'fp16'}"
+        return self.precision
 
-    def get_gpu_memory(self) -> Optional[Dict[str, Any]]:
-        return get_gpu_memory_efficient()
+    def autocast(self):
+        if self.precision == "mixed":
+            dtype = torch.bfloat16 if self.device.type == "cpu" else torch.float16
+            return torch.autocast(device_type=self.device.type, dtype=dtype)
+        return contextlib.nullcontext()
+
+    @property
+    def timing_device(self) -> torch.device:
+        """Device whose events/syncs bracket each iteration."""
+        return self.device
+
+    # ── run ───────────────────────────────────────────────────────
 
     def print_device_info(self) -> None:
         print("=" * 50)
-        print("DEVICE INFORMATION")
-        print("=" * 50)
-        print(f"Selected device: {self.device}")
-        print(f"PyTorch version: {torch.__version__}")
-        if torch.cuda.is_available():
-            print(f"CUDA available: True")
-            print(f"CUDA version: {torch.version.cuda}")
-            print(f"Number of GPUs: {torch.cuda.device_count()}")
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                print(f"GPU {i}: {props.name}")
-                print(f"  Memory: {props.total_memory / 1024**3:.1f} GB")
-        else:
-            print("CUDA available: False")
+        print(f"Device: {self.device}  |  PyTorch {torch.__version__}")
+        if self.device.type == "cuda":
+            props = torch.cuda.get_device_properties(self.device)
+            stack = f"ROCm {torch.version.hip}" if getattr(torch.version, "hip", None) else f"CUDA {torch.version.cuda}"
+            print(f"GPU: {props.name} ({props.total_memory / 1024**3:.1f} GB, {stack})")
+        print(f"Precision: {self.precision}  |  Batch size: {self.batch_size}")
         print("=" * 50)
 
-    def _build_system_info(self) -> SystemInfo:
-        fp = collect_system_fingerprint()
-        si = SystemInfo(
-            device=str(self.device),
-            torch_version=fp.get("torch_version", torch.__version__),
-            python_version=fp.get("python_version", ""),
-            platform=fp.get("platform", ""),
-            kernel_version=fp.get("kernel_version", ""),
-            cpu_model=fp.get("cpu_model", ""),
-            hostname=fp.get("hostname", ""),
-            rocm_version=fp.get("rocm_version", ""),
-            cuda_version=fp.get("cuda_version", ""),
-            gpu_driver_version=fp.get("gpu_driver_version", ""),
-        )
-        if torch.cuda.is_available():
-            si.device_name = torch.cuda.get_device_name(0)
-            si.gpu_memory_total_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            si.gpu_vendor = "amd" if getattr(torch.version, "hip", None) else "nvidia"
-        elif self.device.type == "mps":
-            si.device_name = "Apple MPS"
-            si.gpu_vendor = "apple"
-        else:
-            si.device_name = "CPU"
-            si.gpu_vendor = "none"
-        return si
+    def _make_step_fn(self):
+        model, inputs = self._model, self._inputs
 
-    # ── framework / use_case metadata (override in subclass or set BENCHMARK_META) ──
+        def step():
+            with torch.inference_mode(), self.autocast():
+                return self.run_step(model, inputs)
 
-    @property
-    def framework(self) -> str:
-        return "pytorch"
-
-    @property
-    def mode(self) -> str:
-        return "inference"
-
-    @property
-    def use_case(self) -> str:
-        return "classification"
-
-    # ── main entry point ──────────────────────────────────────────
+        return step
 
     def run(self) -> BenchmarkResult:
-        setup_torch_backends(cudnn_benchmark=True)
+        setup_torch_backends(self.precision)
         self.print_device_info()
-        print(f"Using device: {self.device}")
 
         print("Loading model...")
         self._model = self.load_model()
-
-        num_gpus = getattr(self.args, "num_gpus", 1)
-        if num_gpus > 1 and torch.cuda.device_count() >= num_gpus and isinstance(self._model, torch.nn.Module):
-            from core.multigpu import wrap_data_parallel
-            device_ids = list(range(num_gpus))
-            self._model = wrap_data_parallel(self._model, device_ids)
-
         print("Preparing inputs...")
         self._inputs = self.prepare_inputs()
 
         num_warmup = getattr(self.args, "num_warmup", 5)
         num_runs = getattr(self.args, "num_runs", 20)
-        batch_size = getattr(self.args, "batch_size", 1)
-        precision = getattr(self.args, "precision", "fp32")
-        model_name = getattr(self.args, "model", "unknown")
-
         step_fn = self._make_step_fn()
+        tdev = self.timing_device
 
-        warmup(step_fn, num_warmup, self.device)
+        warmup(step_fn, num_warmup, tdev)
         reset_memory_tracking(self.device)
 
         power_sampler = None
@@ -172,239 +175,179 @@ class BenchmarkHarness:
             power_sampler = PowerSampler(interval_ms=100)
             power_sampler.start()
 
-        latencies_ms = benchmark_loop(step_fn, num_runs, self.device)
+        latencies_ms = benchmark_loop(step_fn, num_runs, tdev)
 
         power_stats = power_sampler.stop() if power_sampler else None
         peak_mem = measure_peak_memory(self.device)
         stats = compute_stats(latencies_ms)
 
         outputs = step_fn()
-        self.synchronize()
-        extra = self.get_extra_metrics(self._model, self._inputs, outputs)
+        synchronize(tdev)
+
+        metrics = latency_metrics(stats, self.batch_size, self.throughput_unit)
+        if peak_mem.get("peak_allocated_gb") and self.framework == "pytorch":  # ORT etc. don't use torch's allocator
+            metrics.append(MetricEntry("peak_memory_gb", peak_mem["peak_allocated_gb"], "GB", "lower_is_better"))
+        if power_stats:
+            tput = metrics[0].value
+            metrics += [
+                MetricEntry("avg_power_watts", power_stats.avg_power_watts, "W", "lower_is_better"),
+                MetricEntry("peak_power_watts", power_stats.peak_power_watts, "W", "lower_is_better"),
+                MetricEntry("samples_per_joule", tput / power_stats.avg_power_watts, "samples/J", "higher_is_better"),
+            ]
+        metrics += self.get_extra_metrics(self._model, self._inputs, outputs)
 
         validator = ResultValidator()
-        validator.expect_greater_than("throughput", (batch_size / stats["mean"]) * 1000.0 if stats["mean"] > 0 else 0, 0)
         self.validate_result(self._model, self._inputs, outputs, validator)
-        validation_passed, validation_checks = validator.validate()
+        return self.finish(metrics, stats, validator)
 
-        mean_ms = stats["mean"]
-        per_sample_ms = mean_ms / batch_size
-        throughput = (batch_size / mean_ms) * 1000.0 if mean_ms > 0 else 0.0
+    def finish(self, metrics: List[MetricEntry], stats: Dict[str, float],
+               validator: Optional[ResultValidator] = None) -> BenchmarkResult:
+        """Validate, assemble and emit the result. Custom ``run()``s call this too."""
+        validator = validator or ResultValidator()
+        for m in metrics:
+            validator.expect_finite(m.name, m.value)
+        primary = next((m for m in metrics if m.name == self.primary_metric), None)
+        validator.expect_greater_than(self.primary_metric, primary.value if primary else 0.0, 0)
 
-        metrics = [
-            MetricEntry("avg_latency_ms", per_sample_ms, "ms", "lower_is_better"),
-            MetricEntry("throughput", throughput, "samples/sec", "higher_is_better"),
-        ]
-        if peak_mem:
-            metrics.append(MetricEntry("peak_memory_gb", peak_mem.get("peak_allocated_gb", 0), "GB", "lower_is_better"))
-        if power_stats:
-            metrics.append(MetricEntry("avg_power_watts", power_stats.avg_power_watts, "W", "lower_is_better"))
-            metrics.append(MetricEntry("peak_power_watts", power_stats.peak_power_watts, "W", "lower_is_better"))
-            metrics.append(MetricEntry("energy_joules", power_stats.energy_joules, "J", "lower_is_better"))
-            if throughput > 0 and power_stats.avg_power_watts > 0:
-                metrics.append(MetricEntry("samples_per_joule", throughput / power_stats.avg_power_watts, "samples/J", "higher_is_better"))
-        metrics.extend(extra)
-
-        input_res = ""
-        if isinstance(self._inputs, torch.Tensor) and self._inputs.dim() >= 3:
-            h, w = self._inputs.shape[-2], self._inputs.shape[-1]
-            input_res = f"{h}x{w}"
-
-        failed_checks = [c for c in validation_checks if not c.passed]
-        if failed_checks:
-            print(f"\nValidation FAILED ({len(failed_checks)} check(s)):")
-            for c in failed_checks:
+        passed, checks = validator.validate()
+        failed = [c for c in checks if not c.passed]
+        if failed:
+            print(f"\nValidation FAILED ({len(failed)} check(s)):")
+            for c in failed:
                 print(f"  {c.name}: {c.message}")
 
         result = BenchmarkResult(
-            status="PASS" if validation_passed else "FAIL",
+            status="PASS" if passed else "FAIL",
             framework=self.framework,
-            model=model_name,
+            model=getattr(self.args, "model", None) or "unknown",
             mode=self.mode,
             use_case=self.use_case,
-            precision=precision,
-            batch_size=batch_size,
-            system_info=self._build_system_info(),
+            precision=self.effective_precision,
+            batch_size=self.batch_size,
+            system_info=build_system_info(self.device),
             metrics=metrics,
             latency_stats=stats,
-            model_architecture=getattr(self, "model_architecture", ""),
-            input_resolution=input_res,
+            primary_metric=self.primary_metric,
+            config=self.get_config(),
             validation_checks=validator.to_dicts(),
-            error="; ".join(c.message for c in failed_checks) if failed_checks else None,
+            error="; ".join(f"{c.name}: {c.message}" for c in failed) or None,
         )
         emit_result(result)
         return result
+
+
+InferenceHarness = BenchmarkHarness
+
+
+def latency_metrics(stats: Dict[str, float], batch_size: int, unit: str = "samples/sec") -> List[MetricEntry]:
+    mean = stats.get("mean", 0.0)
+    return [
+        MetricEntry("throughput", batch_size * 1000.0 / mean if mean > 0 else 0.0, unit, "higher_is_better"),
+        MetricEntry("latency_p50_ms", stats.get("median", 0.0), "ms", "lower_is_better"),
+        MetricEntry("latency_p99_ms", stats.get("p99", 0.0), "ms", "lower_is_better"),
+    ]
 
 
 class TrainingHarness(BenchmarkHarness):
-    """Base class for training benchmarks."""
+    """Times full optimizer steps (forward + backward + update) on a fixed,
+    device-resident synthetic batch, so the number is GPU training throughput,
+    not dataloader/augmentation throughput.
 
-    @property
-    def mode(self) -> str:
-        return "training"
+    Weights stay fp32; fp16/bf16/mixed run under autocast (AMP), fp16 with a
+    GradScaler. A fixed batch must be memorised, so loss has to go down.
+    """
 
-    def create_datasets(self):
-        raise NotImplementedError
+    mode = "training"
 
     def create_optimizer(self, model):
+        return torch.optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+
+    def compute_loss(self, model, inputs) -> torch.Tensor:
         raise NotImplementedError
 
-    def compute_loss(self, outputs, targets, criterion):
-        raise NotImplementedError
+    @property
+    def dtype(self) -> torch.dtype:
+        return torch.float32
 
-    def compute_accuracy(self, outputs, targets) -> float:
-        return 0.0
+    @property
+    def effective_precision(self) -> str:
+        return {"fp16": "amp_fp16", "mixed": "amp_fp16", "bf16": "amp_bf16"}.get(self.precision, self.precision)
 
-    def run(self) -> BenchmarkResult:
-        import time as _time
-        from torch.utils.data import DataLoader
+    def autocast(self):
+        amp = {"fp16": torch.float16, "mixed": torch.float16, "bf16": torch.bfloat16}.get(self.precision)
+        if amp is None:
+            return contextlib.nullcontext()
+        return torch.autocast(device_type=self.device.type, dtype=amp)
 
-        setup_torch_backends(cudnn_benchmark=True)
-        self.print_device_info()
-
-        precision = getattr(self.args, "precision", "fp32")
-        model_name = getattr(self.args, "model", "unknown")
-        batch_size = getattr(self.args, "batch_size", 32)
-        num_epochs = getattr(self.args, "num_epochs", 1)
-        use_amp = precision == "mixed" and self.device.type == "cuda"
-
-        print("Loading model...")
-        model = self.load_model()
-        model.to(self.device)
+    def _make_step_fn(self):
+        model, inputs = self._model, self._inputs
         model.train()
+        opt = self.create_optimizer(model)
+        use_scaler = self.precision in ("fp16", "mixed") and self.device.type == "cuda"
+        scaler = torch.amp.GradScaler("cuda") if use_scaler else None
+        self._losses: List[torch.Tensor] = []
 
-        print("Creating datasets...")
-        train_ds, val_ds = self.create_datasets()
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                                  num_workers=0, pin_memory=(self.device.type == "cuda"))
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
-                                num_workers=0, pin_memory=(self.device.type == "cuda"))
+        def step():
+            opt.zero_grad(set_to_none=True)
+            with self.autocast():
+                loss = self.compute_loss(model, inputs)
+            if scaler:
+                scaler.scale(loss).backward()
+                scaler.step(opt)
+                scaler.update()
+            else:
+                loss.backward()
+                opt.step()
+            self._losses.append(loss.detach())  # no host sync inside the timed loop
+            return loss
 
-        optimizer, scheduler = self.create_optimizer(model)
-        criterion = torch.nn.CrossEntropyLoss()
-        scaler = torch.amp.GradScaler("cuda") if use_amp else None
+        return step
 
-        reset_memory_tracking(self.device)
-        train_losses, val_losses = [], []
-        best_val_acc = 0.0
-        train_throughput = 0.0
-        val_throughput = 0.0
-
-        for epoch in range(num_epochs):
-            model.train()
-            epoch_loss, train_samples = 0.0, 0
-            t0 = _time.perf_counter()
-
-            for batch_idx, (inputs, targets) in enumerate(train_loader):
-                if batch_idx >= 20:
-                    break
-                inputs = inputs.to(self.device, non_blocking=True)
-                targets = targets.to(self.device, non_blocking=True)
-                optimizer.zero_grad(set_to_none=True)
-
-                if use_amp:
-                    with torch.autocast(device_type="cuda"):
-                        outputs = model(inputs)
-                        loss = self.compute_loss(outputs, targets, criterion)
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    outputs = model(inputs)
-                    loss = self.compute_loss(outputs, targets, criterion)
-                    loss.backward()
-                    optimizer.step()
-
-                epoch_loss += loss.item() * inputs.size(0)
-                train_samples += inputs.size(0)
-
-            self.synchronize()
-            train_time = _time.perf_counter() - t0
-            train_throughput = train_samples / train_time if train_time > 0 else 0
-
-            model.eval()
-            val_loss_total, val_correct, val_samples = 0.0, 0.0, 0
-            t0 = _time.perf_counter()
-
-            with torch.inference_mode():
-                for batch_idx, (inputs, targets) in enumerate(val_loader):
-                    if batch_idx >= 10:
-                        break
-                    inputs = inputs.to(self.device, non_blocking=True)
-                    targets = targets.to(self.device, non_blocking=True)
-                    outputs = model(inputs)
-                    loss = self.compute_loss(outputs, targets, criterion)
-                    val_loss_total += loss.item() * inputs.size(0)
-                    val_correct += self.compute_accuracy(outputs, targets) * inputs.size(0)
-                    val_samples += inputs.size(0)
-
-            self.synchronize()
-            val_time = _time.perf_counter() - t0
-            val_throughput = val_samples / val_time if val_time > 0 else 0
-            avg_val_loss = val_loss_total / max(val_samples, 1)
-            val_acc = val_correct / max(val_samples, 1)
-            best_val_acc = max(best_val_acc, val_acc)
-            train_losses.append(epoch_loss / max(train_samples, 1))
-            val_losses.append(avg_val_loss)
-
-            if scheduler:
-                scheduler.step()
-
-            print(f"Epoch {epoch+1}/{num_epochs}: train_loss={train_losses[-1]:.4f} "
-                  f"val_loss={avg_val_loss:.4f} val_acc={val_acc*100:.1f}% "
-                  f"train={train_throughput:.1f} samples/sec")
-
-        peak_mem = measure_peak_memory(self.device)
-        metrics = [
-            MetricEntry("train_throughput", train_throughput, "samples/sec", "higher_is_better"),
-            MetricEntry("val_throughput", val_throughput, "samples/sec", "higher_is_better"),
-            MetricEntry("final_train_loss", train_losses[-1] if train_losses else 0, "loss", "lower_is_better"),
-            MetricEntry("final_val_loss", val_losses[-1] if val_losses else 0, "loss", "lower_is_better"),
-            MetricEntry("best_val_accuracy", best_val_acc * 100, "%", "higher_is_better"),
-            MetricEntry("throughput", train_throughput, "samples/sec", "higher_is_better"),
+    def get_extra_metrics(self, model, inputs, outputs):
+        first, last = self._losses[0].item(), self._losses[-1].item()
+        self._loss_first, self._loss_last = first, last
+        return [
+            MetricEntry("loss_first", first, "loss", "lower_is_better"),
+            MetricEntry("loss_last", last, "loss", "lower_is_better"),
         ]
-        if peak_mem:
-            metrics.append(MetricEntry("peak_memory_gb", peak_mem.get("peak_allocated_gb", 0), "GB", "lower_is_better"))
 
-        result = BenchmarkResult(
-            status="PASS", framework=self.framework, model=model_name,
-            mode=self.mode, use_case=self.use_case, precision=precision,
-            batch_size=batch_size, system_info=self._build_system_info(),
-            metrics=metrics, latency_stats={"mean": (1000.0 / train_throughput) if train_throughput > 0 else 0},
-        )
-        emit_result(result)
-        return result
+    def validate_result(self, model, inputs, outputs, validator):
+        validator.expect_greater_than("loss_decrease", self._loss_first - self._loss_last, 0)
 
 
 class OnnxHarness(BenchmarkHarness):
-    """Base class for ONNX Runtime benchmarks."""
+    """ONNX Runtime: ``session.run`` is synchronous and returns host arrays,
+    so latency is host wall-clock including H2D/D2H copies."""
 
-    @property
-    def framework(self) -> str:
-        return "onnx"
+    framework = "onnx"
 
     def get_onnx_model_path(self) -> str:
-        raise NotImplementedError
-
-    def export_to_onnx(self) -> str:
         raise NotImplementedError
 
     def prepare_numpy_inputs(self) -> dict:
         raise NotImplementedError
 
+    @property
+    def timing_device(self) -> torch.device:
+        return torch.device("cpu")
+
     def load_model(self):
         import onnxruntime as ort
         path = self.get_onnx_model_path()
-        if not Path(path).exists():
-            path = self.export_to_onnx()
-        provider = getattr(self.args, "execution_provider", None)
         available = ort.get_available_providers()
-        if provider and provider in available:
-            providers = [provider]
-        else:
-            providers = available
-        print(f"ONNX providers: {providers}")
-        return ort.InferenceSession(path, providers=providers)
+        provider = getattr(self.args, "execution_provider", None)
+        if provider and provider not in available:
+            raise RuntimeError(f"{provider} not available (have: {available})")
+        providers = [provider] if provider else available
+        if provider == "TensorrtExecutionProvider" and "CUDAExecutionProvider" in available:
+            providers.append("CUDAExecutionProvider")  # nodes TensorRT can't take go to CUDA, not CPU
+        session = ort.InferenceSession(path, providers=providers)
+        self._provider = session.get_providers()[0]
+        print(f"ONNX Runtime {ort.__version__}, active provider: {self._provider}")
+        if provider and self._provider != provider:
+            # ORT silently falls back when a provider is listed but its libraries are missing
+            raise SkipBenchmark(f"{provider} is listed but not usable here (session fell back to {self._provider})")
+        return session
 
     def prepare_inputs(self):
         return self.prepare_numpy_inputs()
@@ -412,149 +355,93 @@ class OnnxHarness(BenchmarkHarness):
     def run_step(self, session, inputs):
         return session.run(None, inputs)
 
-    def run(self) -> BenchmarkResult:
-        import time as _time
-        self.print_device_info()
-
-        precision = getattr(self.args, "precision", "fp32")
-        model_name = getattr(self.args, "model", "unknown")
-        batch_size = getattr(self.args, "batch_size", 1)
-        num_warmup = getattr(self.args, "num_warmup", 5)
-        num_runs = getattr(self.args, "num_runs", 20)
-
-        print("Loading ONNX model...")
-        session = self.load_model()
-        print("Preparing inputs...")
-        inputs = self.prepare_numpy_inputs()
-
-        def step():
-            return session.run(None, inputs)
-
-        print(f"Warming up ({num_warmup} iterations)...")
-        for _ in range(num_warmup):
-            step()
-
-        print(f"Benchmarking ({num_runs} iterations)...")
-        latencies: List[float] = []
-        for _ in range(num_runs):
-            t0 = _time.perf_counter()
-            step()
-            latencies.append((_time.perf_counter() - t0) * 1000.0)
-
-        stats = compute_stats(latencies)
-        outputs = step()
-        extra = self.get_extra_metrics(session, inputs, outputs)
-
-        mean_ms = stats["mean"]
-        per_sample_ms = mean_ms / batch_size
-        throughput = (batch_size / mean_ms) * 1000.0 if mean_ms > 0 else 0.0
-
-        metrics = [
-            MetricEntry("avg_latency_ms", per_sample_ms, "ms", "lower_is_better"),
-            MetricEntry("throughput", throughput, "samples/sec", "higher_is_better"),
-        ]
-        metrics.extend(extra)
-
-        result = BenchmarkResult(
-            status="PASS", framework=self.framework, model=model_name,
-            mode=self.mode, use_case=self.use_case, precision=precision,
-            batch_size=batch_size, system_info=self._build_system_info(),
-            metrics=metrics, latency_stats=stats,
-        )
-        emit_result(result)
-        return result
     def _make_step_fn(self):
-        model = self._model
-        inputs = self._inputs
-        harness = self
+        session, inputs = self._model, self._inputs
+        return lambda: session.run(None, inputs)
 
-        def step():
-            return harness.run_step(model, inputs)
-
-        return step
-
-
-class InferenceHarness(BenchmarkHarness):
-    """Wraps run_step in torch.inference_mode + optional autocast."""
-
-    @property
-    def mode(self) -> str:
-        return "inference"
-
-    def _make_step_fn(self):
-        model = self._model
-        inputs = self._inputs
-        harness = self
-        precision = getattr(self.args, "precision", "fp32")
-        use_autocast = precision == "mixed" and self.device.type == "cuda"
-
-        def step():
-            with torch.inference_mode():
-                if use_autocast:
-                    with torch.autocast(device_type="cuda"):
-                        return harness.run_step(model, inputs)
-                return harness.run_step(model, inputs)
-
-        return step
+    def get_config(self):
+        shapes = {k: list(v.shape) for k, v in (self._inputs or {}).items()}
+        return {"execution_provider": getattr(self, "_provider", None), "input_shapes": shapes}
 
 
 class ComputeHarness(BenchmarkHarness):
-    """For GPU ops benchmarks that run multiple operation sizes and report GFLOPS/GB/s.
+    """Micro-benchmarks. ``get_operations`` yields (name, fn, work, unit) where
+    ``work`` is GFLOP (unit "GFLOPS") or GB moved (unit "GB/s") per call.
 
-    Subclasses override ``get_operations()`` to return a list of
-    (name, fn, flops_or_bytes, metric_unit) tuples.
+    Each sample times ``reps`` back-to-back calls (calibrated to ~5 ms) so tiny
+    kernels measure the kernel, not launch + sync overhead. Yielding lazily lets
+    each op's tensors be freed before the next op allocates.
     """
 
-    @property
-    def use_case(self) -> str:
-        return "compute"
+    use_case = "compute"
 
-    def get_operations(self) -> list:
+    def get_operations(self) -> Iterable[Tuple[str, Any, float, str]]:
         raise NotImplementedError
 
-    def load_model(self):
-        return None
-
-    def prepare_inputs(self):
-        return None
-
-    def run_step(self, model, inputs):
-        return None
-
     def run(self) -> BenchmarkResult:
-        setup_torch_backends(cudnn_benchmark=True)
+        setup_torch_backends(self.precision)
         self.print_device_info()
+        num_runs = getattr(self.args, "num_runs", 20)
 
-        precision = getattr(self.args, "precision", "fp32")
-        model_name = getattr(self.args, "model", "unknown")
-
-        ops = self.get_operations()
         metrics: List[MetricEntry] = []
-        all_latencies: List[float] = []
+        best: Dict[str, float] = {}
+        for name, fn, work, unit in self.get_operations():
+            with torch.inference_mode(), self.autocast():
+                warmup(fn, 3, self.device, desc=f"Warmup {name}")
+                reps = calibrated_reps(fn, self.device)
 
-        for name, fn, theoretical, unit in ops:
-            warmup(fn, 3, self.device, desc=f"Warmup {name}")
-            lats = benchmark_loop(fn, 10, self.device, desc=f"Bench {name}", report_interval=0)
-            stats = compute_stats(lats)
-            all_latencies.extend(lats)
+                def batch(fn=fn, reps=reps):
+                    for _ in range(reps):
+                        fn()
 
-            perf = theoretical / (stats["median"] / 1000.0) if stats["median"] > 0 else 0.0
-            metrics.append(MetricEntry(f"{name}_perf", perf, unit, "higher_is_better"))
-            metrics.append(MetricEntry(f"{name}_median_ms", stats["median"], "ms", "lower_is_better"))
+                lats = benchmark_loop(batch, num_runs, self.device, desc=f"{name} x{reps}", report_interval=0)
+            per_call_ms = compute_stats(lats)["median"] / reps
+            perf = work / (per_call_ms / 1000.0)
+            print(f"  {name}: {perf:,.1f} {unit} ({per_call_ms * 1000:.1f} us/call)")
+            metrics.append(MetricEntry(name, perf, unit, "higher_is_better"))
+            best[unit] = max(best.get(unit, 0.0), perf)
 
-        overall = compute_stats(all_latencies) if all_latencies else {}
+        if "GFLOPS" in best:
+            metrics.insert(0, MetricEntry("best_gflops", best["GFLOPS"], "GFLOPS", "higher_is_better"))
+            self.primary_metric = "best_gflops"
+        if "GB/s" in best:
+            metrics.insert(0, MetricEntry("best_bandwidth_gbs", best["GB/s"], "GB/s", "higher_is_better"))
+            self.primary_metric = "best_bandwidth_gbs"
 
-        result = BenchmarkResult(
-            status="PASS",
-            framework=self.framework,
-            model=model_name,
-            mode=self.mode,
-            use_case=self.use_case,
-            precision=precision,
-            batch_size=1,
-            system_info=self._build_system_info(),
-            metrics=metrics,
-            latency_stats=overall,
+        validator = ResultValidator()
+        self.validate_result(None, None, None, validator)
+        return self.finish(metrics, {}, validator)
+
+
+def run_main(harness_cls, parser: argparse.ArgumentParser) -> None:
+    """Script entry point: always emits a result block, FAIL + error on exceptions."""
+    args = parser.parse_args()
+    harness = None
+    try:
+        harness = harness_cls(args)
+        result = harness.run()
+    except SkipBenchmark as e:
+        print(f"SKIP: {e}")
+        emit_result(BenchmarkResult(status="SKIP", framework=getattr(harness_cls, "framework", "pytorch"),
+                                    model=getattr(args, "model", None) or "unknown",
+                                    mode=getattr(harness_cls, "mode", "inference"),
+                                    use_case=getattr(harness_cls, "use_case", "unknown"),
+                                    precision=getattr(args, "precision", "unknown"),
+                                    batch_size=getattr(args, "batch_size", 1), error=str(e)))
+        sys.exit(0)
+    except Exception as e:  # report every failure as a structured FAIL
+        traceback.print_exc()
+        oom = isinstance(e, torch.OutOfMemoryError) or "out of memory" in str(e).lower()
+        msg = f"OOM: {e}" if oom else f"{type(e).__name__}: {e}"
+        emit_error(
+            framework=getattr(harness_cls, "framework", "pytorch"),
+            model=getattr(args, "model", None) or "unknown",
+            error_msg=" ".join(msg.split())[:500],
+            mode=getattr(harness_cls, "mode", "inference"),
+            use_case=getattr(harness_cls, "use_case", "unknown"),
+            precision=getattr(args, "precision", "unknown"),
+            batch_size=getattr(args, "batch_size", 1),
         )
-        emit_result(result)
-        return result
+        sys.exit(1)
+    sys.exit(0 if result.status == "PASS" else 1)
+

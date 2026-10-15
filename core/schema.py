@@ -1,11 +1,16 @@
-"""Canonical data structures for benchmark results."""
+"""Canonical data structures for benchmark results.
+
+Every benchmark script prints exactly one ``BenchmarkResult`` as JSON between
+``JSON_START`` / ``JSON_END``. The orchestrator (benchmark.py) parses that block
+and treats it as the single source of truth for status and metrics.
+"""
 
 import json
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional
 
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "2.0"
 
 JSON_START = "===BENCHMARK_JSON_START==="
 JSON_END = "===BENCHMARK_JSON_END==="
@@ -37,64 +42,50 @@ class SystemInfo:
 
 
 @dataclass
-class BenchmarkMeta:
-    framework: str
-    model_family: str
-    supported_models: List[str] = field(default_factory=list)
-    supported_precisions: List[str] = field(default_factory=lambda: ["fp32", "fp16", "mixed"])
-    mode: str = "inference"
-    use_case: str = "classification"
-
-
-@dataclass
 class BenchmarkResult:
-    status: str  # "PASS" or "FAIL"
+    status: str  # "PASS", "FAIL", or "SKIP" (config not measurable here; error says why)
     framework: str
     model: str
     mode: str
     use_case: str
-    precision: str
+    precision: str  # effective precision, i.e. what actually ran
     batch_size: int
     system_info: SystemInfo = field(default_factory=SystemInfo)
     metrics: List[MetricEntry] = field(default_factory=list)
+    # Per-iteration latency stats in ms (mean/median/p90/p95/p99/min/max/std/cv_pct/n)
     latency_stats: Dict[str, float] = field(default_factory=dict)
-    model_architecture: str = ""
-    input_resolution: str = ""
+    # Name of the metric that best summarises this run (what reports lead with)
+    primary_metric: str = "throughput"
+    # Workload parameters needed to interpret the numbers (resolution, seq len, steps, ...)
+    config: Dict[str, Any] = field(default_factory=dict)
     validation_checks: List[Dict] = field(default_factory=list)
     error: Optional[str] = None
     schema_version: str = SCHEMA_VERSION
 
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
     def to_json(self) -> str:
-        d = asdict(self)
+        d = self.to_dict()
         d["__benchmark_result__"] = True
-        return json.dumps(d, indent=2)
+        return json.dumps(d, indent=2, default=str)
 
     @classmethod
     def from_json(cls, s: str) -> "BenchmarkResult":
-        d = json.loads(s)
-        return cls.from_dict(d)
+        return cls.from_dict(json.loads(s))
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BenchmarkResult":
         d = dict(d)
         d.pop("__benchmark_result__", None)
-        d.pop("schema_version", None)
-
-        si = d.pop("system_info", {})
+        si = d.pop("system_info", {}) or {}
         if isinstance(si, dict):
-            known_si = {f.name for f in SystemInfo.__dataclass_fields__.values()}
+            known_si = set(SystemInfo.__dataclass_fields__)
             si = SystemInfo(**{k: v for k, v in si.items() if k in known_si})
         d["system_info"] = si
-
-        raw_metrics = d.pop("metrics", [])
-        d["metrics"] = [
-            MetricEntry(**m) if isinstance(m, dict) else m for m in raw_metrics
-        ]
-
-        known = {f.name for f in cls.__dataclass_fields__.values()}
-        d = {k: v for k, v in d.items() if k in known}
-
-        return cls(**d)
+        d["metrics"] = [MetricEntry(**m) if isinstance(m, dict) else m for m in d.get("metrics", [])]
+        known = set(cls.__dataclass_fields__)
+        return cls(**{k: v for k, v in d.items() if k in known})
 
     def get_metric(self, name: str) -> Optional[float]:
         for m in self.metrics:
@@ -102,34 +93,12 @@ class BenchmarkResult:
                 return m.value
         return None
 
-    def to_legacy_metrics(self) -> Dict[str, Any]:
-        """Convert to the dict format that benchmark.py _parse_benchmark_output returns.
 
-        The results display (utils/results.py) expects specific key names:
-        throughput_fps, avg_latency_ms, inference_time_ms, tokens_per_second,
-        best_gflops, best_bandwidth_gbs, seconds_per_image, etc.
-        """
-        NAME_MAP = {
-            "throughput": "throughput_fps",
-            "avg_latency_ms": "avg_latency_ms",
-            "peak_memory_gb": "gpu_memory_allocated_gb",
-            "tokens_per_second": "tokens_per_second",
-            "best_gflops": "best_gflops",
-            "best_bandwidth_gbs": "best_bandwidth_gbs",
-            "seconds_per_image": "seconds_per_image",
-        }
+def metric_map(result: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """{name: {value, unit, direction}} for a result dict (as stored in JSON)."""
+    return {m["name"]: m for m in result.get("metrics") or [] if isinstance(m, dict) and "name" in m}
 
-        legacy: Dict[str, Any] = {}
-        legacy["device"] = self.system_info.device
-        legacy["framework"] = self.framework
 
-        for m in self.metrics:
-            key = NAME_MAP.get(m.name, m.name)
-            legacy[key] = m.value
-
-        if self.latency_stats:
-            if "mean" in self.latency_stats:
-                legacy.setdefault("inference_time_ms", self.latency_stats["mean"])
-                legacy.setdefault("avg_latency_ms", self.latency_stats["mean"])
-
-        return legacy
+def primary(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The headline metric entry of a result dict, or None."""
+    return metric_map(result).get(result.get("primary_metric") or "throughput")

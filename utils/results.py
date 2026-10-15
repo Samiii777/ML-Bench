@@ -1,734 +1,156 @@
-"""
-Results management utilities for the benchmarking framework
+"""Save and display a run's results.
+
+Per run, writes to the output dir:
+  run_<ts>.json   full records (args, system info, every metric, latency stats, logs of failures)
+  run_<ts>.csv    one flat row per test
+  run_<ts>.md     human report grouped by use case
+  history.jsonl   one line per test, appended (feeds the dashboard and trend checks)
+Nothing is estimated: a value that wasn't measured is shown as "—".
 """
 
-import json
 import csv
-import os
+import json
+from collections import defaultdict
 from datetime import datetime
-from typing import Dict, List, Any
 from pathlib import Path
-import pandas as pd
+from typing import Any, Dict, List, Optional
 
-class BenchmarkResults:
-    """Manage benchmark results - saving, loading, and displaying"""
-    
-    def __init__(self):
-        self.results = []
-        self.results_dir = "benchmark_results"
-        # Create results directory if it doesn't exist
-        os.makedirs(self.results_dir, exist_ok=True)
-    
-    def save_results(self, results: List[Dict[str, Any]], args) -> None:
-        """Save benchmark results to files"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        model_str = str(args.model) if args.model else "None"
-        
-        # Create base filename
-        base_filename = f"benchmark_{args.mode}_{model_str}_{timestamp}"
-        
-        # Save JSON results
-        json_file = os.path.join(self.results_dir, f"{base_filename}.json")
-        self._save_json(results, json_file, args)
-        
-        # Save CSV results
-        csv_file = os.path.join(self.results_dir, f"{base_filename}.csv")
-        self._save_csv(results, csv_file)
-        
-        # Save summary
-        summary_file = os.path.join(self.results_dir, f"{base_filename}_summary.txt")
-        self._save_summary(results, summary_file, args)
-        
-        print(f"\nResults saved to:")
-        print(f"  JSON: {json_file}")
-        print(f"  CSV: {csv_file}")
-        print(f"  Summary: {summary_file}")
-    
-    def _save_json(self, results: List[Dict[str, Any]], filepath: Path, args) -> None:
-        """Save results as JSON"""
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        # Add metadata
-        results_with_metadata = {
-            "metadata": {
-                "timestamp": datetime.now().isoformat(),
-                "args": vars(args)
-            },
-            "results": results
-        }
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(results_with_metadata, f, indent=2)
-    
-    def _save_csv(self, results: List[Dict[str, Any]], filepath: Path) -> None:
-        """Save results as CSV"""
-        if not results:
-            return
-        
-        # Flatten the results for CSV
-        flattened_results = []
-        for result in results:
-            flat_result = {
-                "framework": result.get("framework", ""),
-                "model": result.get("model", ""),
-                "mode": result.get("mode", ""),
-                "usecase": result.get("usecase", ""),
-                "precision": result.get("precision", ""),
-                "batch_size": result.get("batch_size", ""),
-                "status": result.get("status", ""),
-                "execution_time": result.get("execution_time", 0),
-                "timestamp": result.get("timestamp", "")
-            }
-            
-            # Add metrics
-            metrics = result.get("metrics", {})
-            for key, value in metrics.items():
-                flat_result[f"metric_{key}"] = value
-            
-            # Add error if failed
-            if result.get("error"):
-                flat_result["error"] = result["error"]
-            
-            flattened_results.append(flat_result)
-        
-        # Write CSV
-        if flattened_results:
-            df = pd.DataFrame(flattened_results)
-            df.to_csv(filepath, index=False)
-    
-    def _save_summary(self, results: List[Dict[str, Any]], filepath: Path, args) -> None:
-        """Save a human-readable summary"""
-        # Ensure directory exists
-        os.makedirs(os.path.dirname(filepath), exist_ok=True)
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write("=" * 100 + "\n")
-            f.write("OVERALL COMPREHENSIVE BENCHMARK SUMMARY\n")
-            f.write("=" * 100 + "\n\n")
-            
-            # Write summary statistics
-            total = len(results)
-            passed = sum(1 for r in results if r.get("status") == "PASS")
-            failed = sum(1 for r in results if r.get("status") == "FAIL")
-            skipped = sum(1 for r in results if r.get("status") == "SKIP")
-            
-            f.write(f"Framework tested: {args.framework}\n")
-            f.write(f"Total combinations: {total}\n")
-            f.write(f"Passed: {passed}\n")
-            f.write(f"Failed: {failed}\n")
-            f.write(f"Skipped: {skipped}\n")
-            f.write(f"Success rate: {(passed/total*100 if total > 0 else 0):.1f}% (of attempted tests)\n\n")
-            
-            # Write detailed results
-            f.write("=" * 100 + "\n")
-            f.write(" " * 40 + "Benchmark Results Summary\n")
-            f.write("=" * 100 + "\n")
-            
-            f.write(f"Total configurations: {total}\n")
-            f.write(f"✅ Passed: {passed}\n")
-            f.write(f"❌ Failed: {failed}\n")
-            f.write(f"⚠️   Skipped: {skipped}\n")
-            f.write(f"Success rate: {(passed/total*100 if total > 0 else 0):.1f}% (of attempted tests)\n\n")
-            
-            if passed > 0:
-                f.write("Successful Results:\n")
-                f.write("-" * 100 + "\n")
-                for result in results:
-                    if result.get("status") == "PASS":
-                        f.write(f"Model: {result.get('model', 'N/A')}\n")
-                        f.write(f"Framework: {result.get('framework', 'N/A')}\n")
-                        f.write(f"Precision: {result.get('precision', 'N/A')}\n")
-                        f.write(f"Batch Size: {result.get('batch_size', 'N/A')}\n")
-                        f.write(f"Metrics: {result.get('metrics', {})}\n")
-                        f.write("-" * 100 + "\n")
-            else:
-                f.write("No successful results to display in table\n")
-    
-    def _print_simple_table(self, headers: List[str], table_data: List[List[str]]) -> None:
-        """Print a simple ASCII table when rich is not available"""
-        # Calculate column widths with specific limits per column type
-        col_widths = []
-        for i, header in enumerate(headers):
-            max_width = len(header)
-            for row in table_data:
-                if i < len(row):
-                    max_width = max(max_width, len(str(row[i])))
-            
-            # Set appropriate width limits based on column type
-            if header == "Test Name":
-                width_limit = 13
-            elif header in ["Model", "Model Name"]:
-                width_limit = 35  # Allow even longer model names for LLMs
-            elif header == "UseCase":
-                width_limit = 18  # Allow full use case names like "text_generation"
-            elif header == "Performance":
-                width_limit = 15  # Allow full performance metrics
-            elif header in ["Framework", "Mode", "Precision", "Batch Size", "Device"]:
-                width_limit = 10
-            else:
-                width_limit = 12
-            
-            col_widths.append(min(max_width + 2, width_limit))
-        
-        # Print header
-        header_row = "| "
-        for i, header in enumerate(headers):
-            header_row += f"{header:<{col_widths[i]-1}}| "
-        print(header_row)
-        
-        # Print separator
-        separator = "|-"
-        for width in col_widths:
-            separator += "-" * (width-1) + "|-"
-        print(separator)
-        
-        # Print data rows
-        for row in table_data:
-            data_row = "| "
-            for i, cell in enumerate(row):
-                if i < len(col_widths):
-                    cell_str = str(cell)[:col_widths[i]-2]  # Truncate if too long
-                    data_row += f"{cell_str:<{col_widths[i]-1}}| "
-            print(data_row)
-    
-    def print_individual_results(self, results: List[Dict[str, Any]]) -> None:
-        """Print individual benchmark results"""
-        passed_results = [r for r in results if r.get("status") == "PASS"]
-        
-        if not passed_results:
-            return
-        
-        print("\nIndividual Results:")
-        print("=" * 80)
-        
-        for result in passed_results:
-            framework = result.get("framework", "unknown").upper()
-            model = result.get("model", "unknown")
-            precision = result.get("precision", "")
-            batch_size = result.get("batch_size", "")
-            usecase = result.get("usecase", "")
-            execution_provider = result.get("execution_provider")
-            metrics = result.get("metrics", {})
-            
-            # Format execution provider
-            provider_suffix = ""
-            if execution_provider and "ExecutionProvider" in execution_provider:
-                provider = execution_provider.replace("ExecutionProvider", "")
-                provider_suffix = f" ({provider})"
-            
-            # Get performance metrics based on use case
-            if usecase == "compute":
-                # For compute use cases, show GFLOPS or GB/s
-                if metrics.get("best_gflops"):
-                    performance_str = f"{metrics['best_gflops']:.1f} GFLOPS"
-                elif metrics.get("best_bandwidth_gbs"):
-                    performance_str = f"{metrics['best_bandwidth_gbs']:.1f} GB/s"
-                else:
-                    throughput = metrics.get("throughput_fps", 0)
-                    latency = metrics.get("avg_latency_ms", 0)
-                    performance_str = f"{throughput:.2f} samples/sec, {latency:.2f} ms/sample"
-            else:
-                # For other use cases, show samples/sec and latency
-                throughput = metrics.get("throughput_fps", 0)
-                latency = metrics.get("avg_latency_ms", 0)
-                performance_str = f"{throughput:.2f} samples/sec, {latency:.2f} ms/sample"
-            
-            print(f"✓ {model} - {framework}{provider_suffix} ({precision}, BS={batch_size}): {performance_str}")
-    
-    def print_summary_table(self, results: List[Dict[str, Any]]) -> None:
-        """Print a summary table of all benchmark results"""
-        if not results:
-            print("No results to display")
-            return
-        
-        # Separate results by status
-        passed_results = [r for r in results if r.get("status") == "PASS"]
-        failed_results = [r for r in results if r.get("status") == "FAIL"]
-        skipped_results = [r for r in results if r.get("status") == "SKIP"]
-        
-        print(f"\n{'='*150}")
-        print(" " * 60 + "Benchmark Results Summary")
-        print(f"{'='*150}")
-        
-        # Print status summary
-        total = len(results)
-        print(f"Total configurations: {total}")
-        print(f"✅ Passed: {len(passed_results)}")
-        print(f"❌ Failed: {len(failed_results)}")
-        print(f"⚠️  Skipped: {len(skipped_results)}")
-        
-        if len(passed_results) + len(failed_results) > 0:
-            success_rate = len(passed_results) / (len(passed_results) + len(failed_results)) * 100
-            print(f"Success rate: {success_rate:.1f}% (of attempted tests)")
-        
-        if len(skipped_results) > 0:
-            skip_rate = len(skipped_results) / total * 100
-            print(f"Skip rate: {skip_rate:.1f}% (intelligent memory management)")
-        
-        # Show skipped configurations summary
-        if skipped_results:
-            print(f"\n{'='*80}")
-            print("SKIPPED CONFIGURATIONS (VRAM Requirements)")
-            print(f"{'='*80}")
-            
-            for result in skipped_results:
-                model = result.get("model", "unknown")
-                precision = result.get("precision", "")
-                batch_size = result.get("batch_size", "")
-                
-                # Check for different skip reasons
-                skip_reason = result.get("metrics", {}).get("skip_reason", "unknown")
-                if skip_reason == "insufficient_vram":
-                    required_memory = result.get("metrics", {}).get("required_memory_gb", 0)
-                    print(f"⚠️  {model} {precision} BS={batch_size} - Required: {required_memory:.1f}GB")
-                elif skip_reason == "vram_insufficient":
-                    vram_req = result.get("metrics", {}).get("vram_requirement", "unknown")
-                    print(f"⚠️  {model} {precision} BS={batch_size} - Required: {vram_req}")
-                else:
-                    print(f"⚠️  {model} {precision} BS={batch_size} - {result.get('error', 'Unknown reason')}")
-        
-        # Show successful results table
-        if not passed_results:
-            print("\nNo successful results to display in table")
-            return
-        
-        print(f"\n{'='*150}")
-        print(" " * 55 + "SUCCESSFUL BENCHMARK RESULTS")
-        print(f"{'='*150}")
-        
-        # Check if any results are training mode to determine table format
-        has_training = any(r.get("mode") == "training" for r in passed_results)
-        
-        # Create table data with different headers for training vs inference
-        table_data = []
-        if has_training:
-            headers = ["Test Name", "Framework", "Model", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Accuracy", "Loss", "Epochs", "Memory", "Device"]
-        else:
-            headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
-        
-        for result in passed_results:
-            # Create test name
-            framework = result.get("framework", "unknown")
-            model = result.get("model", "unknown")
-            test_name = f"{framework}_{model[:3]}"
-            
-            # Get metrics
-            metrics = result.get("metrics", {})
-            mode = result.get("mode", "")
-            
-            # Determine performance metric based on use case and available metrics
-            usecase = result.get("usecase", "")
-            performance_str = "N/A"
-            
-            if usecase == "compute":
-                # For compute use cases, prefer GFLOPS or GB/s over samples/sec
-                if metrics.get("best_gflops"):
-                    performance_str = f"{metrics['best_gflops']:.1f} GFLOPS"
-                elif metrics.get("best_bandwidth_gbs"):
-                    performance_str = f"{metrics['best_bandwidth_gbs']:.1f} GB/s"
-                elif metrics.get("throughput_fps"):
-                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
-                else:
-                    performance_str = "N/A"
-            elif usecase == "text_generation":
-                # For text generation use cases, prefer tokens/s over samples/sec
-                if metrics.get("tokens_per_second"):
-                    performance_str = f"{metrics['tokens_per_second']:.1f} tokens/s"
-                elif metrics.get("throughput_fps"):
-                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
-                else:
-                    performance_str = "N/A"
-            elif usecase == "generation":
-                # For image generation, show seconds/image instead of samples/sec
-                if metrics.get("seconds_per_image"):
-                    performance_str = f"{metrics['seconds_per_image']:.2f} s/img"
-                elif metrics.get("throughput_fps"):
-                    # Calculate seconds/image from throughput
-                    seconds_per_img = 1.0 / metrics['throughput_fps']
-                    performance_str = f"{seconds_per_img:.2f} s/img"
-                else:
-                    performance_str = "N/A"
-            else:
-                # For other use cases (classification, detection, etc), use samples/sec
-                if metrics.get("throughput_fps"):
-                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
-                else:
-                    performance_str = "N/A"
-            
-            # Get memory usage (prioritize total GPU memory, then GPU allocated, then system memory)
-            memory_gb = (
-                metrics.get("total_gpu_memory_used_gb") or 
-                metrics.get("gpu_memory_allocated_gb") or 
-                metrics.get("system_memory_rss_gb") or 
-                self._estimate_memory_usage(result.get("model", ""), result.get("precision", "fp32"))
-            )
-            memory_str = f"{memory_gb:.2f} GB" if memory_gb else "N/A"
-            
-            # Get device
-            device = metrics.get("device", "unknown")
-            if device.startswith("cuda"):
-                device = "cuda"
-            
-            # Add execution provider for ONNX
-            execution_provider = result.get("execution_provider")
-            if execution_provider and "ExecutionProvider" in execution_provider:
-                provider_short = execution_provider.replace("ExecutionProvider", "")
-                device = f"{device} ({provider_short})"
-            
-            if has_training and mode == "training":
-                # Training mode - include accuracy, loss, epochs
-                accuracy_str = "N/A"
-                if metrics.get("best_validation_accuracy") is not None:
-                    accuracy_str = f"{metrics['best_validation_accuracy']:.1f}%"
-                elif metrics.get("best_validation_pixel_accuracy") is not None:
-                    accuracy_str = f"{metrics['best_validation_pixel_accuracy']:.1f}%"
-                elif metrics.get("best_validation_detection_accuracy") is not None:
-                    accuracy_str = f"{metrics['best_validation_detection_accuracy']:.1f}%"
-                
-                loss_str = "N/A"
-                if metrics.get("final_training_loss"):
-                    loss_str = f"{metrics['final_training_loss']:.3f}"
-                
-                epochs_str = str(metrics.get("num_epochs", "N/A"))
-                
-                table_data.append([
-                    test_name,
-                    framework,
-                    model,
-                    mode,
-                    result.get("precision", ""),
-                    str(result.get("batch_size", "")),
-                    usecase,
-                    performance_str,
-                    accuracy_str,
-                    loss_str,
-                    epochs_str,
-                    memory_str,
-                    device
-                ])
-            else:
-                # Inference mode - include latency
-                latency = metrics.get("avg_latency_ms", metrics.get("inference_time_ms", 0))
-                latency_str = f"{latency:.2f} ms" if latency else "N/A"
-                
-                table_data.append([
-                    test_name,
-                    framework,
-                    model,
-                    mode,
-                    result.get("precision", ""),
-                    str(result.get("batch_size", "")),
-                    usecase,
-                    performance_str,
-                    latency_str,
-                    memory_str,
-                    device
-                ])
-        
-        # Print table using rich
-        try:
-            from rich.console import Console
-            from rich.table import Table
-            
-            console = Console()
-            table = Table(show_header=True, header_style="bold magenta")
-            
-            # Add columns with specific widths for better readability
-            for header in headers:
-                if header == "Test Name":
-                    table.add_column(header, min_width=10, max_width=14)
-                elif header in ["Model", "Model Name"]:
-                    table.add_column(header, min_width=18, max_width=30)  # Ensure full model names show
-                elif header == "Framework":
-                    table.add_column(header, min_width=8, max_width=9)
-                elif header == "Performance":
-                    table.add_column(header, min_width=12, max_width=15)
-                elif header == "UseCase":
-                    table.add_column(header, min_width=10, max_width=14)
-                elif header == "Mode":
-                    table.add_column(header, min_width=6, max_width=8)
-                elif header == "Precision":
-                    table.add_column(header, min_width=6, max_width=8)
-                elif header == "Batch Size":
-                    table.add_column(header, min_width=6, max_width=8)
-                else:
-                    table.add_column(header)
-            
-            for row in table_data:
-                table.add_row(*row)
-            
+from core.schema import metric_map, primary
+
+NOISY_CV_PCT = 10.0
+COLUMNS = ["Framework", "Model", "Precision", "BS", "Result", "p50 ms", "p99 ms", "CV %", "Mem GB", "Status"]
+
+
+def _fmt(v: Optional[float], spec: str = ",.2f") -> str:
+    return "—" if v is None else format(v, spec)
+
+
+def row(record: Dict[str, Any]) -> List[str]:
+    """Display cells for one record (shared by console and markdown)."""
+    result = record.get("result") or {}
+    stats = result.get("latency_stats") or {}
+    metrics = metric_map(result)
+    p = primary(result) if record["status"] == "PASS" else None
+    headline = f"{p['value']:,.2f} {p['unit']}" if p else "—"
+    precision = result.get("precision") or record["precision"]
+    if precision != record["precision"]:
+        precision = f"{precision} (req {record['precision']})"
+    model = record["model"] + (f" [{record['execution_provider'].replace('ExecutionProvider', '')}]"
+                               if record.get("execution_provider") else "")
+    cv = stats.get("cv_pct")
+    cv_text = _fmt(cv, ".1f") + (" ⚠" if cv is not None and cv > NOISY_CV_PCT else "")
+    mem = metrics.get("peak_memory_gb", {}).get("value")
+    status = record["status"] if record["status"] == "PASS" else f"{record['status']}: {record.get('error') or ''}"
+    return [record["framework"], model, precision, str(record["batch_size"]), headline,
+            _fmt(stats.get("median")), _fmt(stats.get("p99")), cv_text, _fmt(mem), status]
+
+
+def by_use_case(records: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    groups = defaultdict(list)
+    for r in records:
+        groups[f"{r['use_case']} ({r['mode']})" if r["mode"] != "inference" else r["use_case"]].append(r)
+    return dict(sorted(groups.items()))
+
+
+def system_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    for r in records:
+        si = (r.get("result") or {}).get("system_info")
+        if si and si.get("device_name") not in (None, "unknown"):
+            return si
+    return {}
+
+
+def counts(records: List[Dict[str, Any]]) -> str:
+    c = defaultdict(int)
+    for r in records:
+        c[r["status"]] += 1
+    return f"{c['PASS']} passed, {c['FAIL']} failed, {c['SKIP']} skipped"
+
+
+def print_summary(records: List[Dict[str, Any]]) -> None:
+    if not records:
+        print("No results.")
+        return
+    try:
+        from rich.console import Console
+        from rich.table import Table
+        console = Console(width=None if Console().is_terminal else 200)
+        for use_case, recs in by_use_case(records).items():
+            table = Table(title=use_case, title_justify="left")
+            for col in COLUMNS:
+                table.add_column(col, overflow="fold", justify="right" if col in COLUMNS[3:9] else "left")
+            for r in recs:
+                cells = row(r)
+                style = {"FAIL": "red", "SKIP": "dim"}.get(r["status"])
+                table.add_row(*cells, style=style)
             console.print(table)
-            
-        except ImportError:
-            # Fallback to simple table if rich is not available
-            self._print_simple_table(headers, table_data)
-    
-    def _estimate_memory_usage(self, model: str, precision: str) -> float:
-        """Estimate memory usage based on model and precision"""
-        base_memory = {
-            "resnet18": 0.05,
-            "resnet34": 0.08,
-            "resnet50": 0.11,
-            "resnet101": 0.17,
-            "resnet152": 0.23,
-        }
-        
-        memory = base_memory.get(model, 0.1)  # Default 0.1 GB
-        
-        # Adjust for precision
-        if precision == "fp16":
-            memory *= 0.6  # Roughly 60% of fp32
-        elif precision == "int8":
-            memory *= 0.3  # Roughly 30% of fp32
-        
-        return memory
-    
-    def load_results(self, filepath: str) -> Dict[str, Any]:
-        """Load results from a JSON file"""
-        try:
-            with open(filepath, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"Error loading results from {filepath}: {e}")
-            return {}
-    
-    def _write_table_to_file(self, f, results: List[Dict[str, Any]]) -> None:
-        """Write the benchmark results table to file"""
-        # Filter out failed results for the table
-        passed_results = [r for r in results if r.get("status") == "PASS"]
-        
-        if not passed_results:
-            f.write("No successful results to display\n")
-            return
-        
-        # Check if any results are training mode to determine table format
-        has_training = any(r.get("mode") == "training" for r in passed_results)
-        
-        # Create table data with different headers for training vs inference
-        if has_training:
-            headers = ["Test Name", "Framework", "Model", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Accuracy", "Loss", "Epochs", "Memory", "Device"]
-        else:
-            headers = ["Test Name", "Framework", "Model Name", "Mode", "Precision", "Batch Size", "UseCase", "Performance", "Latency", "Memory", "Device"]
-        
-        table_data = []
-        
-        for result in passed_results:
-            # Create test name
-            framework = result.get("framework", "unknown")
-            model = result.get("model", "unknown")
-            test_name = f"{framework}_{model[:3]}"
-            
-            # Get metrics
-            metrics = result.get("metrics", {})
-            mode = result.get("mode", "")
-            
-            # Determine performance metric based on use case and available metrics
-            usecase = result.get("usecase", "")
-            performance_str = "N/A"
-            
-            if usecase == "compute":
-                # For compute use cases, prefer GFLOPS or GB/s over samples/sec
-                if metrics.get("best_gflops"):
-                    performance_str = f"{metrics['best_gflops']:.1f} GFLOPS"
-                elif metrics.get("best_bandwidth_gbs"):
-                    performance_str = f"{metrics['best_bandwidth_gbs']:.1f} GB/s"
-                elif metrics.get("throughput_fps"):
-                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
-                else:
-                    performance_str = "N/A"
-            elif usecase == "text_generation":
-                # For text generation use cases, prefer tokens/s over samples/sec
-                if metrics.get("tokens_per_second"):
-                    performance_str = f"{metrics['tokens_per_second']:.1f} tokens/s"
-                elif metrics.get("throughput_fps"):
-                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
-                else:
-                    performance_str = "N/A"
-            elif usecase == "generation":
-                # For image generation, show seconds/image instead of samples/sec
-                if metrics.get("seconds_per_image"):
-                    performance_str = f"{metrics['seconds_per_image']:.2f} s/img"
-                elif metrics.get("throughput_fps"):
-                    # Calculate seconds/image from throughput
-                    seconds_per_img = 1.0 / metrics['throughput_fps']
-                    performance_str = f"{seconds_per_img:.2f} s/img"
-                else:
-                    performance_str = "N/A"
-            else:
-                # For other use cases (classification, detection, etc), use samples/sec
-                if metrics.get("throughput_fps"):
-                    performance_str = f"{metrics['throughput_fps']:.2f} samp/s"
-                else:
-                    performance_str = "N/A"
-            
-            # Get memory usage (prioritize total GPU memory, then GPU allocated, then system memory)
-            memory_gb = (
-                metrics.get("total_gpu_memory_used_gb") or 
-                metrics.get("gpu_memory_allocated_gb") or 
-                metrics.get("system_memory_rss_gb") or 
-                self._estimate_memory_usage(result.get("model", ""), result.get("precision", "fp32"))
-            )
-            memory_str = f"{memory_gb:.2f} GB" if memory_gb else "N/A"
-            
-            # Get device
-            device = metrics.get("device", "unknown")
-            if device.startswith("cuda"):
-                device = "cuda"
-            
-            # Add execution provider for ONNX
-            execution_provider = result.get("execution_provider")
-            if execution_provider and "ExecutionProvider" in execution_provider:
-                provider_short = execution_provider.replace("ExecutionProvider", "")
-                device = f"{device} ({provider_short})"
-            
-            if has_training and mode == "training":
-                # Training mode - include accuracy, loss, epochs
-                accuracy_str = "N/A"
-                if metrics.get("best_validation_accuracy") is not None:
-                    accuracy_str = f"{metrics['best_validation_accuracy']:.1f}%"
-                elif metrics.get("best_validation_pixel_accuracy") is not None:
-                    accuracy_str = f"{metrics['best_validation_pixel_accuracy']:.1f}%"
-                elif metrics.get("best_validation_detection_accuracy") is not None:
-                    accuracy_str = f"{metrics['best_validation_detection_accuracy']:.1f}%"
-                
-                loss_str = "N/A"
-                if metrics.get("final_training_loss"):
-                    loss_str = f"{metrics['final_training_loss']:.3f}"
-                
-                epochs_str = str(metrics.get("num_epochs", "N/A"))
-                
-                table_data.append([
-                    test_name,
-                    framework,
-                    model,
-                    mode,
-                    result.get("precision", ""),
-                    str(result.get("batch_size", "")),
-                    usecase,
-                    performance_str,
-                    accuracy_str,
-                    loss_str,
-                    epochs_str,
-                    memory_str,
-                    device
-                ])
-            else:
-                # Inference mode - include latency
-                latency = metrics.get("avg_latency_ms", metrics.get("inference_time_ms", 0))
-                latency_str = f"{latency:.2f} ms" if latency else "N/A"
-                
-                table_data.append([
-                    test_name,
-                    framework,
-                    model,
-                    mode,
-                    result.get("precision", ""),
-                    str(result.get("batch_size", "")),
-                    usecase,
-                    performance_str,
-                    latency_str,
-                    memory_str,
-                    device
-                ])
-        
-        # Write table to file using simple ASCII format
-        self._write_simple_table_to_file(f, headers, table_data)
-    
-    def _write_simple_table_to_file(self, f, headers: List[str], table_data: List[List[str]]) -> None:
-        """Write a simple ASCII table to file"""
-        # Calculate column widths
-        col_widths = []
-        for i, header in enumerate(headers):
-            max_width = len(header)
-            for row in table_data:
-                if i < len(row):
-                    max_width = max(max_width, len(str(row[i])))
-            col_widths.append(min(max_width + 2, 20))  # Cap at 20 chars for file
-        
-        # Write header
-        header_row = "| "
-        for i, header in enumerate(headers):
-            header_row += f"{header:<{col_widths[i]-1}}| "
-        f.write(header_row + "\n")
-        
-        # Write separator
-        separator = "|-"
-        for width in col_widths:
-            separator += "-" * (width-1) + "|-"
-        f.write(separator + "\n")
-        
-        # Write data rows
-        for row in table_data:
-            data_row = "| "
-            for i, cell in enumerate(row):
-                if i < len(col_widths):
-                    cell_str = str(cell)[:col_widths[i]-2]  # Truncate if too long
-                    data_row += f"{cell_str:<{col_widths[i]-1}}| "
-            f.write(data_row + "\n")
-    
-    def _write_performance_analysis_to_file(self, f, results: List[Dict[str, Any]]) -> None:
-        """Write performance analysis to file"""
-        if not results:
-            f.write("No results to analyze\n")
-            return
-        
-        # Group results by model
-        models_data = {}
-        for result in results:
-            if result["status"] == "PASS":
-                model = result["model"]
-                if model not in models_data:
-                    models_data[model] = []
-                models_data[model].append(result)
-        
-        # Analyze each model
-        for model, model_results in models_data.items():
-            f.write(f"{model.upper()} Performance Analysis:\n")
-            f.write("-" * 50 + "\n")
-            
-            # Find best throughput and latency
-            best_throughput = max(model_results, key=lambda x: x["metrics"].get("throughput_fps", 0))
-            best_latency = min(model_results, key=lambda x: x["metrics"].get("avg_latency_ms", float('inf')))
-            
-            # Check if this is a compute model (GPU ops)
-            usecase = model_results[0].get("usecase", "")
-            if usecase == "compute":
-                # For compute models, show GFLOPS or GB/s
-                best_gflops = max(model_results, key=lambda x: x["metrics"].get("best_gflops", 0))
-                best_bandwidth = max(model_results, key=lambda x: x["metrics"].get("best_bandwidth_gbs", 0))
-                
-                if best_gflops["metrics"].get("best_gflops", 0) > 0:
-                    f.write(f"Best GFLOPS: {best_gflops['metrics']['best_gflops']:.1f} GFLOPS\n")
-                    f.write(f"  Configuration: {best_gflops['precision']}, BS={best_gflops['batch_size']}\n")
-                
-                if best_bandwidth["metrics"].get("best_bandwidth_gbs", 0) > 0:
-                    f.write(f"Best Bandwidth: {best_bandwidth['metrics']['best_bandwidth_gbs']:.1f} GB/s\n")
-                    f.write(f"  Configuration: {best_bandwidth['precision']}, BS={best_bandwidth['batch_size']}\n")
-            else:
-                # For other models, show throughput and latency
-                f.write(f"Best Throughput: {best_throughput['metrics'].get('throughput_fps', 0):.2f} samples/sec\n")
-                f.write(f"  Configuration: {best_throughput['precision']}, BS={best_throughput['batch_size']}\n")
-                
-                f.write(f"Best Latency: {best_latency['metrics'].get('avg_latency_ms', 0):.2f} ms/sample\n")
-                f.write(f"  Configuration: {best_latency['precision']}, BS={best_latency['batch_size']}\n")
-            
-            # Precision comparison (for batch size 1)
-            bs1_results = [r for r in model_results if r["batch_size"] == 1]
-            if len(bs1_results) > 1:
-                f.write("Precision Comparison (BS=1):\n")
-                for result in bs1_results:
-                    precision = result["precision"]
-                    if usecase == "compute":
-                        if result["metrics"].get("best_gflops"):
-                            f.write(f"  {precision}: {result['metrics']['best_gflops']:.1f} GFLOPS\n")
-                        elif result["metrics"].get("best_bandwidth_gbs"):
-                            f.write(f"  {precision}: {result['metrics']['best_bandwidth_gbs']:.1f} GB/s\n")
-                        else:
-                            throughput = result["metrics"].get("throughput_fps", 0)
-                            f.write(f"  {precision}: {throughput:.2f} samples/sec\n")
-                    else:
-                        throughput = result["metrics"].get("throughput_fps", 0)
-                        f.write(f"  {precision}: {throughput:.2f} samples/sec\n")
-            
-            f.write("\n") 
+    except ImportError:
+        print(to_markdown(records))
+    print(f"\n{counts(records)}")
+
+
+def to_markdown(records: List[Dict[str, Any]], title: str = "ML-Bench results") -> str:
+    si = system_summary(records)
+    lines = [f"# {title}", ""]
+    if si:
+        stack = f"ROCm {si['rocm_version']}" if si.get("rocm_version") else f"CUDA {si.get('cuda_version') or '—'}"
+        lines += [f"- **Device:** {si.get('device_name')} ({_fmt(si.get('gpu_memory_total_gb'), '.0f')} GB)",
+                  f"- **Stack:** PyTorch {si.get('torch_version')}, {stack}, driver {si.get('gpu_driver_version') or '—'}",
+                  f"- **Host:** {si.get('hostname')} — {si.get('cpu_model')} — {si.get('platform')}", ""]
+    lines += [f"**{counts(records)}**", "",
+              "Latency is per batch (one iteration). CV = std/mean of iteration latency; "
+              f"⚠ marks CV > {NOISY_CV_PCT:.0f}% (noisy, rerun with more iterations).", ""]
+    for use_case, recs in by_use_case(records).items():
+        lines += [f"## {use_case}", "", "| " + " | ".join(COLUMNS) + " |", "|" + "---|" * len(COLUMNS)]
+        lines += ["| " + " | ".join(c.replace("|", "\\|") for c in row(r)) + " |" for r in recs]
+        lines.append("")
+    return "\n".join(lines)
+
+
+def flat_row(record: Dict[str, Any]) -> Dict[str, Any]:
+    result = record.get("result") or {}
+    stats = result.get("latency_stats") or {}
+    p = primary(result) or {}
+    out = {
+        "timestamp": record.get("timestamp"), "framework": record["framework"], "model": record["model"],
+        "mode": record["mode"], "use_case": record["use_case"], "precision": record["precision"],
+        "effective_precision": result.get("precision"), "batch_size": record["batch_size"],
+        "execution_provider": record.get("execution_provider"), "status": record["status"],
+        "primary_metric": result.get("primary_metric"), "primary_value": p.get("value"),
+        "primary_unit": p.get("unit"), "latency_p50_ms": stats.get("median"),
+        "latency_p99_ms": stats.get("p99"), "latency_cv_pct": stats.get("cv_pct"),
+        "duration_s": record.get("duration_s"), "error": record.get("error"),
+    }
+    for name, m in metric_map(result).items():
+        out.setdefault(f"metric_{name}", m.get("value"))
+    return out
+
+
+def save_results(records: List[Dict[str, Any]], output_dir: str, args: Dict[str, Any]) -> Dict[str, Path]:
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    paths = {ext: out / f"run_{ts}.{ext}" for ext in ("json", "csv", "md")}
+
+    payload = {"metadata": {"timestamp": datetime.now().isoformat(timespec="seconds"), "args": args,
+                            "system_info": system_summary(records)},
+               "results": records}
+    paths["json"].write_text(json.dumps(payload, indent=2, default=str))
+
+    rows = [flat_row(r) for r in records]
+    fields = list(dict.fromkeys(k for r in rows for k in r))
+    with paths["csv"].open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    paths["md"].write_text(to_markdown(records))
+
+    with (out / "history.jsonl").open("a") as f:
+        for r in records:
+            f.write(json.dumps({k: v for k, v in r.items() if k != "log_tail"}, default=str) + "\n")
+
+    print("\nResults saved:")
+    for p in paths.values():
+        print(f"  {p}")
+    return paths

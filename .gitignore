@@ -161,3 +161,7 @@ huggingface_hub/
 
 # llama.cpp clone
 llama.cpp/
+# Third-party checkouts created by setup scripts
+benchmarks/ComfyUI/ComfyUI/
+benchmarks/llamacpp/llama.cpp/
+models/
