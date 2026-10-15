@@ -1,454 +1,142 @@
-# ML-Bench: Comprehensive Machine Learning Benchmarking Framework
+# ML-Bench
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
-[![ONNX Runtime](https://img.shields.io/badge/ONNX%20Runtime-1.12+-green.svg)](https://onnxruntime.ai/)
-[![CUDA](https://img.shields.io/badge/CUDA-11.0+-yellow.svg)](https://developer.nvidia.com/cuda-toolkit)
+Benchmarks real ML workloads — vision, detection, NLP, LLMs, image generation, training and GPU
+micro-kernels — across PyTorch, ONNX Runtime, Ollama, llama.cpp and ComfyUI, on NVIDIA (CUDA),
+AMD (ROCm), Apple (MPS) and CPU.
 
-ML-Bench is a comprehensive benchmarking framework designed to evaluate machine learning models across multiple frameworks, precisions, and hardware configurations. It provides standardized performance measurements for deep learning inference workloads with support for PyTorch and ONNX Runtime.
+Every result is **validated** (the model must produce a correct answer, not just run fast), labelled
+with the **precision that actually ran**, and stored with full latency statistics and a system
+fingerprint so runs can be compared over time and across machines.
 
-## 🚀 Key Features
-
-- **Multi-Framework Support**: PyTorch and ONNX Runtime with automatic optimization
-- **Comprehensive Model Coverage**: Image classification, text-to-image generation, and GPU compute operations
-- **Precision Testing**: FP32, FP16, and mixed precision benchmarking
-- **Hardware Optimization**: CUDA, TensorRT, and CPU execution providers
-- **Memory Monitoring**: Real-time GPU memory usage tracking with NVML
-- **Automated Testing**: Comprehensive benchmarking across all valid configurations
-- **Rich Output Formats**: JSON, CSV, and human-readable summary reports  
-- **Interactive Visualizations**: Web dashboard, static reports, and CLI charts
-- **Extensible Architecture**: Easy addition of new models and frameworks
-
-## 📋 Table of Contents
-
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Supported Models](#supported-models)
-- [Usage Examples](#usage-examples)
-- [Visualization](#visualization)
-- [Benchmark Results](#benchmark-results)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [Performance Tips](#performance-tips)
-- [Troubleshooting](#troubleshooting)
-- [License](#license)
-
-## 🛠️ Installation
-
-### Prerequisites
-
-- **Python 3.8+**
-- **NVIDIA GPU** (optional, for GPU benchmarks)
-- **CUDA 11.0+** (for GPU acceleration)
-- **8GB+ RAM** (16GB+ recommended for large models)
-- **20GB+ disk space** (for model downloads)
-
-### Quick Installation
+## Quick start
 
 ```bash
-# Clone the repository
-git clone https://github.com/your-username/ML-Bench.git
-cd ML-Bench
-
-# Create and activate virtual environment
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# or
-.venv\Scripts\activate     # Windows
-
-# Install dependencies
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130   # or rocm7.1 / cpu
 pip install -r requirements.txt
 
-# Set up data files (downloads models and datasets)
-python setup_data.py
+python benchmark.py                                   # default matrix: PyTorch + ONNX + Ollama
+python benchmark.py --model resnet50 --batch_size 1 64
+python benchmark.py --model gpu_ops --precision fp32 tf32 fp16 bf16
+python benchmark.py --model Qwen/Qwen3-8B --script-args "--prompt_tokens 1024 --max_tokens 256"
+python benchmark.py --mode training
+python benchmark.py --framework llamacpp --model ~/models/Qwen3.5-9B-Q4_K_M.gguf
+python benchmark.py --dry-run                         # show the test matrix
+python benchmark.py --list-benchmarks
 ```
 
-### Verify Installation
+Each run prints a table and writes `benchmark_results/run_<timestamp>.{json,csv,md}` plus one line per
+test to `benchmark_results/history.jsonl`. The exit code is 1 if any test failed.
 
 ```bash
-# Test basic functionality
-python benchmark.py --framework pytorch --model resnet18 --precision fp32 --batch_size 1
-
-# Check GPU support
-python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
+python compare.py benchmark_results/run_A.json benchmark_results/run_B.json --threshold 5   # exit 1 on regression
+python benchmark.py --dashboard                                                            # Streamlit, reads history
 ```
 
-## 🚀 Quick Start
+## Workloads
 
-### Run Comprehensive Benchmarks (Default)
+| Use case | Framework | Default models | Headline metric |
+|---|---|---|---|
+| Image classification | PyTorch, ONNX | `resnet50`, `vit_b_16`, `convnext_tiny` (any torchvision name works) | samples/sec |
+| Object detection | PyTorch, ONNX | `yolo11s` (Ultralytics, incl. NMS) | samples/sec |
+| Text classification | PyTorch | `bert-base` (seq len 128) | samples/sec |
+| LLM generation | PyTorch (HF) | `Qwen/Qwen3-1.7B`, `Qwen/Qwen3-8B`, `meta-llama/Llama-3.1-8B` (any HF causal LM id) | decode tokens/sec |
+| LLM generation | Ollama | `llama3.1:8b`, `qwen3:8b`, `gemma3:4b`, `gpt-oss:20b` | decode tokens/sec |
+| LLM generation | llama.cpp | any GGUF (`--model path.gguf`) | decode tokens/sec |
+| Image generation | PyTorch (diffusers) | `stable_diffusion_1_5`, `stable_diffusion_3_5_medium`, `flux_2_klein_4b`, `z_image_turbo` | seconds/image |
+| Image generation | ComfyUI | `comfyui_flux_schnell`, `comfyui_flux_dev` | seconds/image |
+| Training | PyTorch | `resnet50`, `vit_b_16` | samples/sec |
+| GPU kernels | PyTorch | `gemm_ops`, `conv_ops`, `memory_ops`, `elementwise_ops`, `reduction_ops` | best GFLOPS / GB/s |
+
+Also available but not in the default matrix: `stable_diffusion_3_5_large_turbo`, `flux_1_schnell`,
+`flux_1_dev` (these need >24 GB or `--script-args --cpu_offload`), and Qwen3.5 checkpoints
+(`--model Qwen/Qwen3.5-9B`; install `flash-linear-attention` + `causal-conv1d` for the fast path).
+
+Default precisions and batch sizes per use case live in `utils/config.py`.
+
+## What the numbers mean
+
+**Precision** — the label is what ran:
+
+| `--precision` | Meaning |
+|---|---|
+| `fp32` | IEEE fp32. TF32 is explicitly **off** for matmul *and* cuDNN conv (PyTorch enables cuDNN TF32 by default). |
+| `tf32` | fp32 tensors with TF32 math allowed. |
+| `fp16`, `bf16` | weights and activations in that dtype. |
+| `mixed` | fp32 weights, fp16 autocast. |
+| training | weights stay fp32; `fp16`/`bf16` run as AMP and are reported as `amp_fp16`/`amp_bf16`. |
+
+**Timing** — warmup iterations first, then each timed iteration is bracketed by device events
+(CUDA/ROCm) or synchronised wall clock. GC is disabled during the timed loop.
+
+| Metric | Definition |
+|---|---|
+| `throughput` | `batch_size / mean iteration latency` |
+| `latency_p50_ms`, `latency_p99_ms` | per **batch** (one iteration), not per sample |
+| CV % | std/mean of iteration latency; reports flag CV > 10% as noisy |
+| `peak_memory_gb` | PyTorch allocator peak during the timed loop (omitted when the framework doesn't allocate through PyTorch) |
+| `seconds_per_image` | full pipeline call (text encode + all steps + VAE) / batch size, at each model's reference resolution and step count |
+
+**LLMs** — fixed workload: prompt of exactly `--prompt_tokens` (128) tokens, exactly `--max_tokens` (128)
+new tokens, greedy, EOS ignored, so token counts are exact.
+`ttft_ms` is a `max_new_tokens=1` call (prefill + first token);
+`decode_tokens_per_sec = batch × (N−1) / (full − ttft)`;
+`prefill_tokens_per_sec = batch × prompt_tokens / ttft`.
+Ollama and llama.cpp report the same quantities from their own server-side timings, so
+`decode_tokens_per_sec` means the same thing across all three.
+
+**GPU kernels** — work is useful FLOPs (2 per multiply-add) or the minimum DRAM bytes (reads + writes).
+Each sample times enough back-to-back calls to fill ~5 ms, so small kernels aren't measured as launch
+overhead. Bandwidth tests use 256M-element tensors (0.5–1 GB) so they measure DRAM, not cache.
+Compare against datasheet peaks: on an RTX 4090 expect ~160 TFLOPS fp16 GEMM and ~920 GB/s copy.
+
+**Correctness checks** (a failed check makes the test FAIL):
+classification top-1 = "Samoyed" on `data/dog.jpg`; YOLO detects the dog; BERT rates a positive review
+≥4 stars and a negative one ≤2; LLM perplexity on a reference passage is sane and exactly N tokens are
+generated; generated images are finite and not blank; training loss decreases; GEMM matches an fp64
+reference (the fp32 bound is tight enough to catch accidental TF32); every metric is finite.
+
+**Status** — the JSON block each script prints is the source of truth. A script that exits non-zero, prints
+no result, or exceeds `--timeout` is a FAIL with the log tail attached (a timeout kills the script's whole
+process group, so a stuck `llama-bench` or ComfyUI server can't keep the GPU busy for later tests).
+SKIPs carry a reason: no GPU for fp16, framework not installed, ONNX provider listed but unusable,
+model too large for free VRAM (override with `--skip-vram-check`).
+
+## Layout
+
+```
+benchmark.py                  orchestrator: matrix -> subprocess per test -> collect JSON
+compare.py                    compare two runs, gate on regressions
+dashboard.py                  Streamlit view of history.jsonl
+core/harness.py               shared timing / memory / validation / output for all scripts
+core/schema.py                BenchmarkResult (the JSON contract)
+utils/config.py               model registry and default matrix
+utils/results.py              JSON / CSV / Markdown reports
+benchmarks/<framework>/<family>/<mode>/<use_case>/main.py
+tests/                        pytest; tests/test_gpu_smoke.py runs only with a GPU
+```
+
+## Adding a benchmark
+
+Subclass a harness, implement three methods, and add the model to `utils/config.py`:
+
+```python
+class MyBench(InferenceHarness):
+    use_case = "classification"
+    def load_model(self):  return build().to(self.device, self.dtype).eval()
+    def prepare_inputs(self):  return torch.randn(self.batch_size, 3, 224, 224, device=self.device, dtype=self.dtype)
+    def run_step(self, model, x):  return model(x)
+    def validate_result(self, model, x, out, v):  v.expect_finite("logit0", out[0, 0].item())
+
+if __name__ == "__main__":
+    run_main(MyBench, build_base_parser("My benchmark"))
+```
+
+`run_main` handles warmup, timing, stats, memory, `--power` sampling, and always emits a result
+(a structured FAIL with the error, including `OOM:`, if anything raises).
+
+## Tests
 
 ```bash
-# Run all models across all use cases (comprehensive)
-python3 benchmark.py
-
-# Run all models with specific precision
-python3 benchmark.py --precision fp16
-
-# Run all models with specific batch sizes
-python3 benchmark.py --batch_size 1 4
+python -m pytest            # harness math, FLOP/byte accounting, status rules, reports; + GPU smoke tests if a GPU exists
+python -m pytest -m gpu     # only the GPU end-to-end tests
 ```
-
-### Run Specific Benchmarks
-
-```bash
-# Basic ResNet-50 benchmark
-python benchmark.py --framework pytorch --model resnet50 --precision fp16 --batch_size 4
-
-# Stable Diffusion generation benchmark
-python benchmark.py --usecase generation --precision fp16
-
-# GPU compute operations benchmark
-python benchmark.py --usecase compute --model gemm_ops --precision fp16
-```
-
-### Run Framework-Specific Comprehensive Benchmarks
-
-```bash
-# Test all models with default settings
-python benchmark.py --comprehensive
-
-# Test specific framework comprehensively
-python benchmark.py --framework pytorch --comprehensive
-
-# Test specific use case comprehensively
-python benchmark.py --usecase classification --comprehensive
-```
-
-### Quick Performance Test
-
-```bash
-# Fast performance overview
-python benchmark.py --framework pytorch --model resnet18 --precision fp16 --batch_size 1 4 8
-```
-
-## 🎯 Supported Models
-
-### Image Classification (PyTorch + ONNX)
-- **ResNet Family**: ResNet-18, ResNet-34, ResNet-50, ResNet-101, ResNet-152
-- **Use Case**: `classification`
-- **Precisions**: FP32, FP16, Mixed
-- **Batch Sizes**: 1, 4, 8, 16, 32+
-
-### Text-to-Image Generation (PyTorch)
-- **Stable Diffusion 1.5**: High-speed image generation
-- **Stable Diffusion 3 Medium**: Latest high-quality generation
-- **Use Case**: `generation`
-- **Precisions**: FP32, FP16, Mixed
-- **Memory**: 4-22GB VRAM depending on model and precision
-
-### GPU Compute Operations (PyTorch + ONNX)
-- **GEMM Operations**: Matrix multiplication benchmarks
-- **Convolution Operations**: 2D convolution performance
-- **Memory Operations**: Memory bandwidth testing
-- **Element-wise Operations**: Point-wise computations
-- **Reduction Operations**: Sum, mean, max operations
-- **Use Case**: `compute`
-
-## 📊 Usage Examples
-
-### Basic Usage
-
-```bash
-# Single model benchmark
-python benchmark.py --framework pytorch --model resnet50 --precision fp16 --batch_size 4
-
-# Multiple batch sizes
-python benchmark.py --framework pytorch --model resnet50 --precision fp16 --batch_size 1 4 8 16
-
-# Multiple precisions
-python benchmark.py --framework pytorch --model resnet50 --precision fp32 fp16 mixed --batch_size 4
-```
-
-### Use Case-Based Benchmarking
-
-```bash
-# Image classification benchmarks
-python benchmark.py --usecase classification --framework pytorch
-
-# Text-to-image generation benchmarks
-python benchmark.py --usecase generation --precision fp16
-
-# GPU compute benchmarks
-python benchmark.py --usecase compute --framework pytorch --precision fp16
-```
-
-### Framework Comparison
-
-```bash
-# Compare PyTorch vs ONNX for ResNet
-python benchmark.py --framework pytorch onnx --model resnet50 --precision fp16 --batch_size 4
-
-# Compare all frameworks for classification
-python benchmark.py --usecase classification --framework pytorch onnx --comprehensive
-```
-
-### Advanced Configuration
-
-```bash
-# ONNX with specific execution provider
-python benchmark.py --framework onnx --model resnet50 --execution_provider TensorrtExecutionProvider
-
-# Comprehensive benchmarking with custom output
-python benchmark.py --comprehensive --output_dir custom_results/
-
-# Memory-optimized Stable Diffusion
-python benchmark.py --usecase generation --model sd15 --precision fp16 --batch_size 1
-```
-
-## 📊 Visualization
-
-ML-Bench includes powerful visualization tools to analyze benchmark results through interactive dashboards, static reports, and CLI summaries.
-
-### Quick Visualization
-
-```bash
-# Run benchmarks and launch interactive dashboard
-python benchmark.py --visualize
-
-# Generate static HTML report
-python benchmark.py --visualize --viz-mode static
-
-# Create CLI summary
-python benchmark.py --visualize --viz-mode cli
-```
-
-### Standalone Visualization
-
-```bash
-# Interactive web dashboard (recommended)
-python visualize.py
-
-# CLI analysis
-python visualize.py --mode cli
-
-# Static HTML report
-python visualize.py --mode static
-```
-
-### Visualization Features
-
-- **🌐 Interactive Dashboard**: Real-time filtering, interactive charts, data export
-- **📊 Performance Analysis**: Throughput, latency, memory usage comparisons  
-- **🔥 Framework Heatmaps**: Performance matrices across models and frameworks
-- **⚡ Precision Impact**: FP32 vs FP16 vs Mixed precision analysis
-- **📈 Batch Size Scaling**: Optimal batch size identification
-- **💾 Memory Analysis**: VRAM usage patterns and requirements
-- **🎯 Model Radar Charts**: Multi-dimensional performance comparison
-
-See [VISUALIZATION.md](VISUALIZATION.md) for complete documentation and examples.
-
-## 🎯 Benchmark Results
-
-### Output Formats
-
-ML-Bench generates results in multiple formats:
-
-1. **JSON Files**: Raw benchmark data with full metrics
-2. **CSV Files**: Tabular data for analysis and plotting
-3. **Summary Reports**: Human-readable performance summaries
-4. **Console Output**: Real-time progress and results
-
-### Sample Output
-
-```
-============================================================
-BENCHMARK RESULTS SUMMARY
-============================================================
-Framework: PyTorch | Model: resnet50 | Precision: fp16 | Batch Size: 4
-
-✅ PASS | Inference Time: 12.34 ms | Throughput: 324.2 samples/sec
-   GPU Memory: 2.1 GB | Latency: 3.08 ms/sample
-
-============================================================
-STABLE DIFFUSION BENCHMARK SUMMARY  
-============================================================
-✅ Stable Diffusion 1.5: 2.34 images/sec, 3.9 GB VRAM
-✅ Stable Diffusion 3 Medium: 0.81 images/sec, 14.2 GB VRAM
-============================================================
-```
-
-### Results Directory Structure
-
-```
-benchmark_results/
-├── benchmark_pytorch_resnet50_20241201_143022.json    # Raw results
-├── benchmark_pytorch_resnet50_20241201_143022.csv     # Tabular data
-├── benchmark_pytorch_comprehensive_summary.txt        # Human-readable summary
-└── performance_comparison_20241201_143022.json        # Framework comparison
-```
-
-## 🏗️ Project Structure
-
-```
-ML-Bench/
-├── benchmark.py                    # Main benchmarking script (1,104 lines)
-├── requirements.txt                # Python dependencies
-├── setup_data.py                   # Model and data setup
-├── README.md                       # This file
-├── LICENSE                         # Project license
-│
-├── utils/                          # Core utilities (194 lines total)
-│   ├── config.py                   # Model and framework configuration
-│   ├── logger.py                   # Colored logging system
-│   ├── results.py                  # Results processing and output
-│   ├── shared_device_utils.py      # GPU memory monitoring
-│   └── download.py                 # Model download utilities
-│
-├── benchmarks/                     # Benchmark implementations
-│   ├── pytorch/                    # PyTorch benchmarks
-│   │   ├── resnet/                 # ResNet classification
-│   │   ├── stable_diffusion/       # Stable Diffusion generation
-│   │   └── gpu_ops/               # GPU compute operations
-│   └── onnx/                      # ONNX Runtime benchmarks
-│       ├── resnet/                # ResNet classification
-│       └── gpu_ops/               # GPU compute operations
-│
-├── benchmark_results/              # Generated benchmark results
-├── data/                          # Downloaded models and datasets
-└── .venv/                         # Virtual environment (gitignored)
-```
-
-### Key Components
-
-- **`benchmark.py`**: Main orchestrator handling test execution and result aggregation
-- **`utils/config.py`**: Central configuration for models, frameworks, and simple VRAM checking
-- **`utils/results.py`**: Comprehensive result processing and output generation
-- **`benchmarks/{framework}/`**: Framework-specific benchmark implementations
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-### Quick Contribution Steps
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/your-feature`
-3. Make your changes and test thoroughly
-4. Submit a pull request with a clear description
-
-### Adding New Models
-
-1. Create benchmark script: `benchmarks/{framework}/{model_family}/{mode}/{usecase}/main.py`
-2. Update configuration: Add model to `utils/config.py`
-3. Follow existing patterns for argument parsing and output formatting
-4. Test with the main framework: `python benchmark.py --model your_model`
-
-## ⚡ Performance Tips
-
-### For Best Performance
-
-1. **Use FP16 precision** on CUDA GPUs for optimal speed/memory balance
-2. **Enable TensorRT** for ONNX models: `--execution_provider TensorrtExecutionProvider`
-3. **Optimize batch sizes** based on your GPU memory capacity
-4. **Close other applications** to free GPU memory
-5. **Use latest NVIDIA drivers** and CUDA toolkit
-
-### Memory Optimization
-
-```bash
-# For large models like Stable Diffusion 3
-python benchmark.py --usecase generation --model sd3 --precision fp16 --batch_size 1
-
-# Enable CPU offload for SD3 if needed
-python benchmarks/pytorch/stable_diffusion/inference/generation/main.py --model sd3 --cpu-offload
-```
-
-### Batch Size Guidelines
-
-| Model Type | GPU Memory | Recommended Batch Size |
-|------------|------------|----------------------|
-| ResNet-50 FP16 | 8GB | 16-32 |
-| ResNet-50 FP32 | 8GB | 8-16 |
-| Stable Diffusion 1.5 | 8GB | 1-2 |
-| Stable Diffusion 3 | 16GB+ | 1 |
-
-## 🔧 Troubleshooting
-
-### Common Issues
-
-**CUDA Out of Memory**
-```bash
-# Reduce batch size
-python benchmark.py --model resnet50 --batch_size 1
-
-# Use FP16 precision
-python benchmark.py --model resnet50 --precision fp16
-```
-
-**Model Download Failures**
-```bash
-# Re-run setup with verbose output
-python setup_data.py --verbose
-
-# Check internet connection and disk space
-df -h  # Check disk space
-```
-
-**TensorRT Compilation Errors**
-```bash
-# Fall back to CUDA provider
-python benchmark.py --framework onnx --execution_provider CUDAExecutionProvider
-```
-
-**Import Errors**
-```bash
-# Reinstall dependencies
-pip install -r requirements.txt --force-reinstall
-
-# Check virtual environment activation
-which python  # Should point to .venv/bin/python
-```
-
-### Getting Help
-
-1. Check existing [issues](https://github.com/your-username/ML-Bench/issues)
-2. Review [troubleshooting documentation](docs/troubleshooting.md)
-3. Open a new issue with:
-   - System information (`nvidia-smi`, `python --version`)
-   - Full error message and stack trace
-   - Command that caused the issue
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **PyTorch Team** for the excellent deep learning framework
-- **ONNX Runtime Team** for high-performance inference
-- **Hugging Face** for model hosting and diffusers library
-- **NVIDIA** for CUDA and TensorRT optimization tools
-
----
-
-**Ready to benchmark?** Start with: `python3 benchmark.py` for comprehensive testing across all models and use cases, or `python3 benchmark.py --framework pytorch --model resnet18 --precision fp16 --batch_size 4` for specific model testing.
-
-For more examples and advanced usage, see our [documentation](docs/) and [examples](examples/) directories.
-
-## Memory Management
-
-**Simple VRAM checking is enabled by default** to prevent out-of-memory crashes by skipping Stable Diffusion configurations that require more VRAM than available.
-
-### How It Works
-
-- **Large models** (Stable Diffusion): Checked against available VRAM and skipped if insufficient
-- **Small models** (ResNet, GPU operations): Run without VRAM checking as they use minimal memory
-
-### VRAM Requirements Table
-
-| Model | FP32 | FP16 | Mixed |
-|-------|------|------|-------|
-| Stable Diffusion 1.5 | 12.0GB | 6.0GB | 9.0GB |
-| Stable Diffusion 3 | >24GB | 20.0GB | >24GB |
-
-*Requirements scale with batch size (each additional batch adds ~80% more VRAM)*
-
-```bash
-# SD3 FP32 will be skipped automatically
-python3 benchmark.py --model sd3 --precision fp32 --batch_size 1
-# ⚠️  SKIPPED - VRAM insufficient: Requires >24GB VRAM (available: 23.4GB)
-
-# SD3 FP16 will run if you have enough VRAM
-python3 benchmark.py --model sd3 --precision fp16 --batch_size 1
-# ✓ 1.00 samples/sec
-``` 

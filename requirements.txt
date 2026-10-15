@@ -1,33 +1,30 @@
-# Core ML frameworks
-#torch>=1.9.0
-#torchvision>=0.10.0
-#onnx>=1.12.0
-#onnxruntime-gpu>=1.12.0
+# Install PyTorch for your GPU first (https://pytorch.org/get-started/locally/), e.g.
+#   CUDA: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+#   ROCm: pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm7.1
+# then: pip install -r requirements.txt
 
-# Object Detection (YOLOv5)
-ultralytics>=8.0.0
-opencv-python>=4.5.0
+numpy>=1.26
+Pillow>=10.0
+rich>=13.0
 
-# Stable Diffusion and generative models
-diffusers>=0.21.0
-transformers>=4.21.0
-accelerate>=0.20.0
-sentencepiece>=0.2.0
+# Hugging Face workloads (LLM, BERT, image generation)
+transformers>=4.56
+diffusers>=0.36          # FLUX.2-klein and Z-Image pipelines
+accelerate>=1.0
+sentencepiece>=0.2
+protobuf>=4.0
 
-# System monitoring and GPU memory measurement
-psutil>=5.8.0
-#nvidia-ml-py3>=7.352.0
-#amdsmi>=24.6.0  # AMD GPU monitoring library
+# Detection
+ultralytics>=8.3.150     # YOLO11, ONNX export with in-graph NMS
 
-# Visualization and dashboard
-streamlit>=1.28.0
-plotly>=5.15.0
-matplotlib>=3.5.0
-seaborn>=0.11.0
+# ONNX Runtime benchmarks (pick the build matching your GPU; onnxruntime-rocm / -migraphx on AMD)
+onnxruntime-gpu>=1.20
+onnx>=1.17
+onnxscript>=0.3          # torch.onnx.export(dynamo=True)
 
-# Development and testing
-pytest>=6.0.0
-
-numpy>=1.21.0
-pandas>=1.3.0
-Pillow>=8.3.0 
+# Optional: power sampling (--power) on NVIDIA, dashboard, tests
+nvidia-ml-py>=12.0
+streamlit>=1.40
+plotly>=5.20
+pandas>=2.0
+pytest>=8.0

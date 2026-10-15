@@ -24,9 +24,10 @@ for parent in project_root.parents:
             sys.path.insert(0, str(parent))
         break
 
-from utils.shared_device_utils import get_gpu_memory_efficient, collect_system_fingerprint
-from core.schema import BenchmarkResult, MetricEntry, SystemInfo
-from core.output import emit_result
+from core.harness import build_system_info
+from core.schema import BenchmarkResult, MetricEntry
+from core.output import emit_result, emit_error
+from utils.benchmark_utils import compute_stats
 
 
 class ComfyUIServer:
@@ -68,11 +69,9 @@ class ComfyUIServer:
         self.process = subprocess.Popen(
             server_cmd,
             cwd=str(self.comfyui_dir),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # Combine stderr with stdout
+            stdout=open(self.comfyui_dir / "server.log", "w"),  # a never-read PIPE would stall the server
+            stderr=subprocess.STDOUT,
             preexec_fn=os.setsid if hasattr(os, 'setsid') else None,
-            text=True,
-            bufsize=1  # Line buffered
         )
         
         # Wait for server to be ready
@@ -171,12 +170,15 @@ class ComfyUIAPI:
                         # Workflow completed, extract execution time
                         history_entry = history[prompt_id]
                         
-                        # Try to get execution time from status
+                        # Server-side execution time from the status message timestamps (ms)
+                        status = history_entry.get('status', {})
+                        if status.get('status_str') == 'error':
+                            raise RuntimeError(f"ComfyUI workflow failed: {status.get('messages', [])[-1:]}")
+                        stamps = {name: data.get('timestamp') for name, data in status.get('messages', [])
+                                  if isinstance(data, dict)}
                         execution_time = None
-                        if 'status' in history_entry:
-                            status = history_entry['status']
-                            if 'completed_at' in status and 'started_at' in status:
-                                execution_time = status['completed_at'] - status['started_at']
+                        if stamps.get('execution_start') and stamps.get('execution_success'):
+                            execution_time = (stamps['execution_success'] - stamps['execution_start']) / 1000.0
                         
                         return {
                             'history': history_entry,
@@ -186,7 +188,7 @@ class ComfyUIAPI:
                 # Still processing, wait before checking again
                 time.sleep(check_interval)
                 
-            except Exception as e:
+            except requests.exceptions.RequestException as e:
                 print(f"Warning: Error checking completion status: {e}")
                 time.sleep(check_interval)
 
@@ -535,12 +537,12 @@ def benchmark_comfyui_flux(model='comfyui_flux_schnell', num_warmup=3, num_runs=
         timing_method = "ComfyUI execution time" if comfyui_execution_times else "Wall-clock time"
         print(f"\nTiming method: {timing_method}")
         
-        # Get memory usage
+        # The model lives in the ComfyUI server process, so this process's allocator
+        # stats are meaningless; read device-wide usage instead (includes other processes).
         memory_used_gb = 0
         if device == "cuda":
-            torch.cuda.synchronize()
-            peak_memory = torch.cuda.max_memory_allocated()
-            memory_used_gb = peak_memory / 1024**3
+            free, total = torch.cuda.mem_get_info()
+            memory_used_gb = (total - free) / 1024**3
         
         # Print results
         print(f"\n{'='*60}")
@@ -567,34 +569,14 @@ def benchmark_comfyui_flux(model='comfyui_flux_schnell', num_warmup=3, num_runs=
         comfyui_output = comfyui_path / "output"
         print(f"\nGenerated images saved to: {comfyui_output}")
 
-        # Build and emit structured BenchmarkResult
-        fp = collect_system_fingerprint()
-        si = SystemInfo(
-            device=device,
-            torch_version=fp.get("torch_version", torch.__version__),
-            python_version=fp.get("python_version", ""),
-            platform=fp.get("platform", ""),
-            kernel_version=fp.get("kernel_version", ""),
-            cpu_model=fp.get("cpu_model", ""),
-            hostname=fp.get("hostname", ""),
-            rocm_version=fp.get("rocm_version", ""),
-            cuda_version=fp.get("cuda_version", ""),
-            gpu_driver_version=fp.get("gpu_driver_version", ""),
-        )
-        if torch.cuda.is_available():
-            si.device_name = torch.cuda.get_device_name(0)
-            si.gpu_memory_total_gb = torch.cuda.get_device_properties(0).total_memory / 1024**3
-            si.gpu_vendor = "amd" if getattr(torch.version, "hip", None) else "nvidia"
-
+        stats = compute_stats([t * 1000 for t in latencies])
         bench_metrics = [
             MetricEntry("seconds_per_image", seconds_per_image, "s", "lower_is_better"),
             MetricEntry("throughput", throughput, "images/sec", "higher_is_better"),
-            MetricEntry("avg_latency_ms", avg_latency * 1000, "ms", "lower_is_better"),
+            MetricEntry("latency_p50_ms", stats["median"], "ms", "lower_is_better"),
         ]
         if memory_used_gb > 0:
-            bench_metrics.append(
-                MetricEntry("peak_memory_gb", memory_used_gb, "GB", "lower_is_better")
-            )
+            bench_metrics.append(MetricEntry("device_memory_used_gb", memory_used_gb, "GB", "lower_is_better"))
 
         bench_result = BenchmarkResult(
             status="PASS",
@@ -604,15 +586,11 @@ def benchmark_comfyui_flux(model='comfyui_flux_schnell', num_warmup=3, num_runs=
             use_case="generation",
             precision="fp16",
             batch_size=1,
-            system_info=si,
+            system_info=build_system_info(torch.device(device)),
             metrics=bench_metrics,
-            latency_stats={
-                "mean": avg_latency * 1000,
-                "std": std_latency * 1000,
-                "min": min_latency * 1000,
-                "max": max_latency * 1000,
-            },
-            input_resolution=f"{width}x{height}",
+            latency_stats=stats,
+            primary_metric="seconds_per_image",
+            config={"resolution": f"{width}x{height}", "steps": steps, "timing": timing_method},
         )
         emit_result(bench_result)
 
@@ -647,7 +625,7 @@ def main():
     parser.add_argument('--width', type=int, default=1024, help='Image width')
     parser.add_argument('--height', type=int, default=1024, help='Image height')
     
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()  # ignore orchestrator flags ComfyUI doesn't use
     
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -656,16 +634,13 @@ def main():
         print(f"GPU: {torch.cuda.get_device_name()}")
     print()
     
-    results = benchmark_comfyui_flux(
-        model=args.model,
-        num_warmup=args.num_warmup,
-        num_runs=args.num_runs,
-        steps=args.steps,
-        width=args.width,
-        height=args.height
-    )
-    
-    if results is None:
+    try:
+        benchmark_comfyui_flux(model=args.model, num_warmup=args.num_warmup, num_runs=args.num_runs,
+                               steps=args.steps, width=args.width, height=args.height)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        emit_error("comfyui", args.model, f"{type(e).__name__}: {e}", use_case="generation", precision="fp16")
         sys.exit(1)
 
 

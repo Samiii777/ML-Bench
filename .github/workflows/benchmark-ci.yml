@@ -1,4 +1,4 @@
-name: Benchmark CI
+name: CI
 
 on:
   push:
@@ -7,43 +7,28 @@ on:
     branches: [main]
 
 jobs:
-  smoke-test:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
 
-      - name: Install dependencies
-        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu && pip install numpy Pillow
-
-      - name: Run CPU smoke test (ResNet50 fp32)
+      - name: Install dependencies (CPU)
         run: |
-          python benchmarks/pytorch/resnet/inference/classification/main.py \
-            --model resnet50 --precision fp32 --batch_size 1 \
-            --device cpu --num_runs 3 --num_warmup 1
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install numpy Pillow rich pytest
 
-      - name: Verify JSON output format
+      - name: Unit tests
+        run: python -m pytest
+
+      - name: End-to-end smoke test (ResNet50, CPU, through the orchestrator)
         run: |
-          output=$(python benchmarks/pytorch/resnet/inference/classification/main.py \
-            --model resnet50 --precision fp32 --batch_size 1 \
-            --device cpu --num_runs 2 --num_warmup 1 2>&1)
-          echo "$output" | grep -q "BENCHMARK_JSON_START" || (echo "Missing JSON output" && exit 1)
-          echo "$output" | grep -q '"status": "PASS"' || (echo "Benchmark did not PASS" && exit 1)
-          echo "JSON output format verified"
-
-      - name: Verify benchmark discovery
-        run: python benchmark.py --list-benchmarks
-
-      - name: Save results
-        if: github.ref == 'refs/heads/main'
-        run: |
-          python benchmark.py --framework pytorch --model resnet50 \
-            --precision fp32 --batch_size 1 --mode inference \
-            --usecase classification --device cpu --timeout 5
+          python benchmark.py --framework pytorch --model resnet50 --precision fp32 --batch_size 1 \
+            --device cpu --num_runs 3 --num_warmup 1 --output_dir benchmark_results
 
       - uses: actions/upload-artifact@v4
         if: always()

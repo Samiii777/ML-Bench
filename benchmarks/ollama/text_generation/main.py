@@ -1,373 +1,103 @@
 #!/usr/bin/env python3
-"""
-Ollama Text Generation Benchmark
+"""Ollama text generation benchmark (server must be running on localhost:11434).
 
-This script benchmarks Ollama models for text generation tasks.
-It measures throughput, latency, and other performance metrics.
+Uses Ollama's own server-side timings (nanoseconds), not HTTP wall time:
+  decode_tokens_per_sec   eval_count / eval_duration            [primary]
+  prefill_tokens_per_sec  prompt_eval_count / prompt_eval_duration
+  ttft_ms                 load + prompt eval of a request
+Warmup requests load the model first. Every request gets a unique prefix so
+Ollama's prompt cache can't turn the prefill measurement into a cache hit.
+Greedy decoding with a fixed seed and --max_tokens cap.
 """
 
 import sys
-import os
-import argparse
-import requests
-import time
-import json
 from pathlib import Path
+sys.path.insert(0, str(next(p for p in Path(__file__).resolve().parents if (p / "benchmark.py").exists())))
 
-# Add project root to path for imports
-project_root = Path(__file__).resolve()
-for parent in project_root.parents:
-    if (parent / "benchmark.py").exists():
-        if str(parent) not in sys.path:
-            sys.path.insert(0, str(parent))
-        break
+import json
+import urllib.request
 
-from utils.config import OLLAMA_MODELS
-from core.schema import BenchmarkResult, MetricEntry, SystemInfo
-from core.output import emit_result
+import torch
+
+from core.args import add_text_args, build_base_parser
+from core.harness import BenchmarkHarness, run_main
+from core.schema import MetricEntry
+from core.validation import ResultValidator
+from utils.benchmark_utils import compute_stats
+
+HOST = "http://localhost:11434"
+PROMPT = ("Explain, step by step and in detail, how a modern GPU executes a matrix multiplication, "
+          "covering memory hierarchy, tiling, tensor cores, and how software libraries choose kernels.")
 
 
-def get_model_configs():
-    """Get configurations for available Ollama models, driven by utils/config.py."""
-    return [
-        {'name': m, 'model_id': m, 'type': 'text_generation'}
-        for m in OLLAMA_MODELS
-    ]
+def api(path: str, payload=None, timeout: float = 600):
+    req = urllib.request.Request(HOST + path, data=json.dumps(payload).encode() if payload else None,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read())
 
-def check_ollama_server():
-    """Check if Ollama server is running"""
-    try:
-        response = requests.get('http://localhost:11434/api/tags', timeout=5)
-        return response.status_code == 200
-    except requests.exceptions.ConnectionError:
-        return False
-    except Exception:
-        return False
 
-def ensure_model_available(model_name):
-    """Ensure the model is available (pull if necessary)"""
-    try:
-        # Check if model is already available
-        response = requests.get('http://localhost:11434/api/tags')
-        if response.status_code == 200:
-            available_models = [model['name'] for model in response.json().get('models', [])]
-            if model_name in available_models:
-                return True
-        
-        # Try to pull the model
-        print(f"Pulling model {model_name}...")
-        pull_url = 'http://localhost:11434/api/pull'
-        pull_payload = {"name": model_name}
-        response = requests.post(pull_url, json=pull_payload)
-        return response.status_code == 200
-    except Exception as e:
-        print(f"Error ensuring model availability: {e}")
-        return False
+class OllamaGeneration(BenchmarkHarness):
+    framework = "ollama"
+    use_case = "text_generation"
+    primary_metric = "decode_tokens_per_sec"
 
-def unload_model(model_name):
-    """Unload a model from GPU memory and wait for completion"""
-    try:
-        url = 'http://localhost:11434/api/generate'
-        headers = {'Content-Type': 'application/json'}
-        payload = {"model": model_name, "prompt": "", "keep_alive": 0}
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
-        
-        if response.status_code == 200:
-            print(f"Model {model_name} unload requested...")
-            
-            # Give Ollama time to actually unload the model from GPU memory
-            # This prevents the next model from failing due to insufficient memory
-            print(f"Waiting for GPU memory to be freed...")
-            time.sleep(5)  # Wait 5 seconds for the unload to complete
-            
-            # Additional check: Try to ping the Ollama server to ensure it's responsive
-            try:
-                check_response = requests.get('http://localhost:11434/api/tags', timeout=5)
-                if check_response.status_code == 200:
-                    print(f"Model {model_name} unloaded and server is ready")
-                    return True
-                else:
-                    print(f"Warning: Server not responding properly after unloading {model_name}")
-                    return False
-            except Exception as e:
-                print(f"Warning: Could not verify server status after unloading {model_name}: {e}")
-                # Still return True as the initial unload request succeeded
-                return True
-        else:
-            print(f"Warning: Failed to unload model {model_name} - {response.status_code}")
-            return False
-    except Exception as e:
-        print(f"Warning: Error unloading model {model_name}: {e}")
-        return False
+    def generate(self, i: int):
+        return api("/api/generate", {
+            "model": self.args.model, "prompt": f"[request {i}] {PROMPT}", "stream": False,
+            "options": {"num_predict": self.args.max_tokens, "temperature": 0, "seed": 0},
+        })
 
-def run_generation(model_name, prompt):
-    """Run text generation with Ollama"""
-    url = 'http://localhost:11434/api/generate'
-    headers = {'Content-Type': 'application/json'}
-    payload = {"model": model_name, "prompt": prompt, "stream": False}
-    
-    start_time = time.time()
-    try:
-        response = requests.post(url, headers=headers, json=payload, timeout=300)
-        end_time = time.time()
-        
-        if response.status_code == 200:
-            result = response.json()
-            result['wall_time'] = end_time - start_time
-            return result
-        else:
-            print(f"Error: HTTP {response.status_code} - {response.text}")
-            return None
-    except Exception as e:
-        print(f"Error during generation: {e}")
-        return None
+    def run(self):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # for system info only
+        model = self.args.model
+        self._version = api("/api/version").get("version", "?")
+        if model not in {m["name"] for m in api("/api/tags").get("models", [])}:
+            print(f"Pulling {model} (one-time download)...")
+            api("/api/pull", {"model": model, "stream": False}, timeout=3600)
+        print(f"Ollama {self._version}, model {model}")
 
-def run_single_model_benchmark(model_config, params):
-    """Run benchmark for a single model"""
-    model_name = model_config['model_id']
-    
-    print(f"\n{'='*60}")
-    print(f"BENCHMARKING: {model_config['name']}")
-    print(f"{'='*60}")
-    print(f"Model ID: {model_name}")
-    print(f"Number of runs: {params.num_runs}")
-    
-    # Check if Ollama server is running
-    if not check_ollama_server():
-        return {
-            'model': model_config['name'],
-            'status': 'FAILED',
-            'error': 'Ollama server not running. Please start Ollama server.'
-        }
-    
-    # Ensure model is available
-    if not ensure_model_available(model_name):
-        return {
-            'model': model_config['name'],
-            'status': 'FAILED',
-            'error': f'Model {model_name} not available and could not be pulled.'
-        }
-    
-    # Define test prompts
-    prompts = [
-        "Write me a C++ code that solves the fibonacci without recursion",
-        "Explain the concept of quantum entanglement in simple terms", 
-        "Compose a poem inspired by the idea of artificial intelligence"
-    ]
-    
-    if params.custom_prompt:
-        prompts = [params.custom_prompt] * params.num_runs
-    
-    # Run benchmark
-    results = []
-    all_times = []
-    all_token_counts = []
-    all_throughputs = []
-    
-    for i in range(params.num_runs):
-        prompt = prompts[i % len(prompts)]
-        print(f"Benchmark run {i+1}/{params.num_runs}")
-        
-        result = run_generation(model_name, prompt)
-        if result is None:
-            # Unload model before failing
-            print(f"\nCleaning up model {model_config['name']} after failure...")
-            unload_model(model_name)
-            return {
-                'model': model_config['name'],
-                'status': 'FAILED',
-                'error': f'Generation failed on run {i+1}'
-            }
-        
-        results.append(result)
-        
-        # Extract metrics
-        eval_count = result.get('eval_count', 0)
-        eval_duration = result.get('eval_duration', 0) / 1e9  # Convert nanoseconds to seconds
-        wall_time = result.get('wall_time', 0)
-        
-        all_times.append(wall_time)
-        all_token_counts.append(eval_count)
-        
-        # Calculate throughput - prefer eval_duration, fallback to wall_time
-        if eval_duration > 0 and eval_count > 0:
-            throughput = eval_count / eval_duration
-            all_throughputs.append(throughput)
-            print(f"  Time: {wall_time:.2f}s | Tokens: {eval_count} | Throughput: {throughput:.2f} tokens/sec")
-        elif wall_time > 0 and eval_count > 0:
-            # Fallback calculation using wall time
-            throughput = eval_count / wall_time
-            all_throughputs.append(throughput)
-            print(f"  Time: {wall_time:.2f}s | Tokens: {eval_count} | Throughput: {throughput:.2f} tokens/sec (wall time)")
-        else:
-            print(f"  Time: {wall_time:.2f}s | Tokens: {eval_count} | Throughput: N/A")
-    
-    # Calculate averages
-    avg_time = sum(all_times) / len(all_times)
-    avg_tokens = sum(all_token_counts) / len(all_token_counts)
-    avg_throughput = sum(all_throughputs) / len(all_throughputs) if all_throughputs else 0
-    
-    print(f"\n{'-'*50}")
-    print(f"RESULTS: {model_config['name']}")
-    print(f"{'-'*50}")
-    print(f"Average time per run: {avg_time:.3f} seconds")
-    print(f"Average tokens generated: {avg_tokens:.1f}")
-    print(f"Average throughput: {avg_throughput:.2f} tokens/sec")
-    print(f"Number of runs: {params.num_runs}")
-    
-    # Framework parseable output
-    print(f"\n# Benchmark Framework Parseable Output for {model_config['name']}")
-    print(f"Framework: Ollama")
-    print(f"Task: text_generation")
-    print(f"Tokens per second: {avg_throughput:.2f}")
-    print(f"Per-sample Latency: {avg_time*1000:.2f} ms/sample")
-    print(f"Average Tokens: {avg_tokens:.1f}")
-    print(f"# End Parseable Output for {model_config['name']}")
-    
-    # Unload model to free GPU memory for next benchmark
-    print(f"\nCleaning up model {model_config['name']}...")
-    unload_model(model_name)
-    
-    # Emit structured JSON result
-    metrics = [
-        MetricEntry("avg_latency_ms", avg_time * 1000, "ms", "lower_is_better"),
-        MetricEntry("tokens_per_second", avg_throughput, "tokens/sec", "higher_is_better"),
-        MetricEntry("avg_tokens_per_run", avg_tokens, "tokens", "higher_is_better"),
-    ]
-    system_info = SystemInfo(device="ollama", device_name="ollama")
-    benchmark_result = BenchmarkResult(
-        status="PASS",
-        framework="ollama",
-        model=model_name,
-        mode="inference",
-        use_case="text_generation",
-        precision=getattr(params, "precision", "auto"),
-        batch_size=1,
-        system_info=system_info,
-        metrics=metrics,
-        latency_stats={
-            "mean": avg_time * 1000,
-            "num_runs": params.num_runs,
-        },
-    )
-    emit_result(benchmark_result)
-
-    return {
-        'model': model_config['name'],
-        'status': 'PASSED',
-        'avg_time': avg_time,
-        'avg_tokens': avg_tokens,
-        'avg_throughput': avg_throughput,
-        'num_runs': params.num_runs
-    }
-
-def run_inference(params):
-    """Main function to run Ollama benchmarks"""
-    print("="*60)
-    print("OLLAMA TEXT GENERATION BENCHMARK")
-    print("="*60)
-    print(f"Number of runs per model: {params.num_runs}")
-    if params.custom_prompt:
-        print(f"Custom prompt: {params.custom_prompt}")
-    
-    # Get model configurations
-    model_configs = get_model_configs()
-    
-    # Filter models if specified
-    if params.model:
-        model_configs = [config for config in model_configs if config['model_id'] == params.model]
-        if not model_configs:
-            print(f"Error: Model '{params.model}' not found in available models.")
-            available_models = [config['model_id'] for config in get_model_configs()]
-            print(f"Available models: {', '.join(available_models)}")
-            return [{'model': params.model, 'status': 'FAILED', 'error': 'Model not found'}]
-    
-    results = []
-    
-    for i, model_config in enumerate(model_configs):
-        print(f"\n{'='*60}")
-        print(f"STARTING MODEL {i+1}/{len(model_configs)}: {model_config['name']}")
-        print(f"{'='*60}")
-        
+        for i in range(max(1, self.args.num_warmup)):
+            self.generate(-1 - i)
+        runs = [self.generate(i) for i in range(self.args.num_runs)]
         try:
-            result = run_single_model_benchmark(model_config, params)
-            results.append(result)
-        except KeyboardInterrupt:
-            print(f"\nBenchmark interrupted by user")
-            result = {'model': model_config['name'], 'status': 'INTERRUPTED'}
-            results.append(result)
-            break
-        except Exception as e:
-            print(f"Error benchmarking {model_config['name']}: {e}")
-            result = {'model': model_config['name'], 'status': 'FAILED', 'error': str(e)}
-            results.append(result)
-    
-    # Print summary
-    print(f"\n{'='*60}")
-    print("BENCHMARK SUMMARY")
-    print(f"{'='*60}")
-    
-    for result in results:
-        if result['status'] == 'PASSED':
-            print(f"[PASS] {result['model']}: {result['avg_throughput']:.2f} tokens/sec")
-        else:
-            error_msg = result.get('error', 'Unknown error')
-            print(f"[FAIL] {result['model']}: FAILED - {error_msg}")
-    
-    print(f"{'='*60}")
-    print("Benchmark completed!")
-    
-    return results
+            api("/api/generate", {"model": model, "keep_alive": 0})  # free VRAM for the next test
+        except Exception:
+            pass
 
-def main():
-    """Main function for Ollama text generation benchmark"""
-    parser = argparse.ArgumentParser(description='Ollama Text Generation Benchmark')
-    
-    # Model selection
-    available_models = [config['model_id'] for config in get_model_configs()]
-    parser.add_argument('--model', type=str, default=None,
-                        help=f'Specific model to benchmark (available: {", ".join(available_models)})')
-    
-    # Benchmark settings
-    parser.add_argument('--num-runs', type=int, default=3,
-                        help='Number of benchmark runs per model (default: 3)')
-    
-    # Framework compatibility arguments (may not be used but needed for integration)
-    parser.add_argument('--precision', type=str, default='auto',
-                        choices=['fp32', 'fp16', 'mixed', 'auto'],
-                        help='Precision mode (not used by Ollama, for framework compatibility)')
-    parser.add_argument('--batch_size', type=int, default=1,
-                        help='Batch size (not used by Ollama, for framework compatibility)')
-    parser.add_argument('--device', type=str, default='auto',
-                        help='Device (not used by Ollama, for framework compatibility)')
-    
-    # Custom prompt
-    parser.add_argument('--custom-prompt', type=str, default=None,
-                        help='Custom prompt for generation (default: use test prompts)')
-    
-    args = parser.parse_args()
-    
-    try:
-        results = run_inference(args)
-        
-        # Check if any benchmarks failed
-        failed_results = [r for r in results if r.get('status') == 'FAILED']
-        if failed_results:
-            print(f"\nOllama benchmark failed! {len(failed_results)} out of {len(results)} benchmarks failed.")
-            for failed in failed_results:
-                print(f"Failed: {failed['model']} - {failed.get('error', 'Unknown error')}")
-            return 1
-        else:
-            print("\nOllama benchmark completed successfully!")
-            return 0
-    except KeyboardInterrupt:
-        print("\nOllama benchmark interrupted by user")
-        return 1
-    except Exception as e:
-        print(f"\nError during Ollama benchmark: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
+        ns = 1e-9
+        evals = sum(r.get("eval_count", 0) for r in runs)
+        eval_s = sum(r.get("eval_duration", 0) for r in runs) * ns
+        prompts = sum(r.get("prompt_eval_count", 0) for r in runs)
+        prompt_s = sum(r.get("prompt_eval_duration", 0) for r in runs) * ns
+        stats = compute_stats([r.get("total_duration", 0) / 1e6 for r in runs])
+        ttft = compute_stats([(r.get("load_duration", 0) + r.get("prompt_eval_duration", 0)) / 1e6 for r in runs])
+        self._sample = runs[-1].get("response", "")
+        print(f"Sample: {self._sample[:120]!r}")
+
+        metrics = [
+            MetricEntry("decode_tokens_per_sec", evals / eval_s if eval_s else 0.0, "tokens/sec", "higher_is_better"),
+            MetricEntry("prefill_tokens_per_sec", prompts / prompt_s if prompt_s else 0.0, "tokens/sec",
+                        "higher_is_better"),
+            MetricEntry("ttft_ms", ttft.get("median", 0.0), "ms", "lower_is_better"),
+            MetricEntry("avg_output_tokens", evals / len(runs), "tokens", "higher_is_better"),
+        ]
+        self._prompt_tokens = prompts / len(runs)
+        validator = ResultValidator()
+        validator.expect_greater_than("output_tokens", evals, 0)
+        return self.finish(metrics, stats, validator)
+
+    @property
+    def effective_precision(self):
+        return "auto"
+
+    def get_config(self):
+        return {"ollama_version": self._version, "max_tokens": self.args.max_tokens,
+                "avg_prompt_tokens": self._prompt_tokens, "decoding": "temperature 0, seed 0"}
+
 
 if __name__ == "__main__":
-    sys.exit(main())
+    parser = build_base_parser("Ollama text generation", precisions=["auto"])  # Ollama picks quantization
+    add_text_args(parser)
+    parser.set_defaults(model="llama3.1:8b", num_runs=5, num_warmup=1)
+    run_main(OllamaGeneration, parser)
